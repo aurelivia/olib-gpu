@@ -5,9 +5,11 @@ const enums = @import("./enums.zig");
 const Self = @This();
 const Interface = @import("./interface.zig");
 const Canvas = @import("./canvas.zig");
+const Texture = @import("./texture.zig");
 
 interface: *Interface,
 inner: util.Known(wgpu.WGPUSurface),
+depth: ?Texture,
 format: enums.TextureFormat,
 config: wgpu.WGPUSurfaceConfiguration,
 
@@ -24,7 +26,7 @@ pub const Source = union (enum) {
     xlib: struct { display: *anyopaque, window: u32 }
 };
 
-pub fn init(interface: *Interface, source: Source, width: u32, height: u32) !Self {
+pub fn init(interface: *Interface, source: Source, width: u32, height: u32, useDepth: bool) !Self {
     const desc: wgpu.WGPUSurfaceDescriptor = .{
         .nextInChain = switch (source) {
             .android_native => |win| @ptrCast(&wgpu.WGPUSurfaceSourceAndroidNativeWindow{
@@ -104,19 +106,27 @@ pub fn init(interface: *Interface, source: Source, width: u32, height: u32) !Sel
 
     wgpu.wgpuSurfaceConfigure(inner, &config);
 
-    return .{
+    var surface: Self = .{
         .interface = interface,
         .inner = inner,
         .depth = null,
         .format = @enumFromInt(format),
         .config = config
     };
+
+    if (useDepth) surface.depth = try surface.getDepthTexture();
+
+    return surface;
 }
 
 pub fn resize(self: *Self, width: u32, height: u32) !void {
     self.config.width = width;
     self.config.height = height;
     wgpu.wgpuSurfaceConfigure(self.inner, &self.config);
+    if (self.depth) |*depth| {
+        depth.deinit();
+        depth.* = try self.getDepthTexture();
+    }
 }
 
 pub fn canvas(self: *Self) !Canvas {
@@ -128,4 +138,18 @@ pub fn present(self: *Self) !void {
         wgpu.WGPUStatus_Success => {},
         else => return error.PresentationError
     }
+}
+
+fn getDepthTexture(self: *Self) !Texture {
+    return try .init(self.interface, self.config.width, self.config.height, .{
+        .usage = Texture.Usage.render_attachment.with(.texture_binding),
+        .format = .depth32_float,
+        .sampler = .{
+            .mag_filter = .linear,
+            .min_filter = .linear,
+            .lod_min_clamp = 0.0,
+            .lod_max_clamp = 100.0,
+            .compare = .less_equal
+        }
+    });
 }

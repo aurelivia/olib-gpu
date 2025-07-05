@@ -159,6 +159,28 @@ pub fn init(interface: *Interface, comptime layout: Layout) !Self {
             .targetCount = layout.fragment.targets.len,
             .targets = &targets
         },
+        .depthStencil = if (layout.depth) &.{
+            .format = wgpu.WGPUTextureFormat_Depth32Float,
+            .depthWriteEnabled = @intFromBool(true),
+            .depthCompare = wgpu.WGPUCompareFunction_Less,
+            .stencilFront = .{
+                .compare = wgpu.WGPUCompareFunction_Always,
+                .failOp = wgpu.WGPUStencilOperation_Keep,
+                .depthFailOp = wgpu.WGPUStencilOperation_Keep,
+                .passOp = wgpu.WGPUStencilOperation_Keep
+            },
+            .stencilBack = .{
+                .compare = wgpu.WGPUCompareFunction_Always,
+                .failOp = wgpu.WGPUStencilOperation_Keep,
+                .depthFailOp = wgpu.WGPUStencilOperation_Keep,
+                .passOp = wgpu.WGPUStencilOperation_Keep
+            },
+            .stencilReadMask = 0xFFFFFFFF,
+            .stencilWriteMask = 0xFFFFFFFF,
+            .depthBias = 0,
+            .depthBiasSlopeScale = 0.0,
+            .depthBiasClamp = 0.0
+        } else null,
         .multisample = .{
             .count = 1,
             .mask = ~@as(u32, 0),

@@ -131,4 +131,6 @@ pub const FilterMode = buildEnum(wgpu.WGPUFilterMode, "WGPUFilterMode_", &[_][:0
 pub const BufferBindingType = buildEnum(wgpu.WGPUBufferBindingType, "WGPUBufferBindingType_", &[_][:0]const u8 {
     "Undefined", "Force32"
 });
+pub const CompareFunction = buildEnum(wgpu.WGPUCompareFunction, "WGPUCompareFunction_", &[_][:0]const u8 {
+    "Force32"
 });

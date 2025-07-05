@@ -15,6 +15,7 @@ const Self = @This();
 interface: *Interface,
 target: util.Known(wgpu.WGPUTexture),
 view: util.Known(wgpu.WGPUTextureView),
+depth_view: wgpu.WGPUTextureView,
 encoder: util.Known(wgpu.WGPUCommandEncoder),
 pass: wgpu.WGPURenderPassEncoder,
 pipeline_set: bool = false,
@@ -22,11 +23,11 @@ pipeline_set: bool = false,
 pub fn deinit(self: *Self) void {
     if (self.pass) |pass| wgpu.wgpuRenderPassEncoderRelease(pass);
     wgpu.wgpuCommandEncoderRelease(self.encoder);
+    if (self.depth_view) |depth_view| wgpu.wgpuTextureViewRelease(depth_view);
     wgpu.wgpuTextureViewRelease(self.view);
-    wgpu.wgpuTextureRelease(self.target);
 }
 
-fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture)) !Self {
+fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture), depth: ?wgpu.WGPUTexture) !Self {
     const view = wgpu.wgpuTextureCreateView(target, &.{
         .format = wgpu.WGPUTextureFormat_Undefined,
         .dimension = wgpu.WGPUTextureViewDimension_Undefined,
@@ -39,6 +40,21 @@ fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture)) !Self 
     }) orelse return error.CreateTextureViewFailed;
     errdefer wgpu.wgpuTextureViewRelease(view);
 
+    var depth_view: wgpu.WGPUTextureView = null;
+    if (depth) |d| {
+        depth_view = wgpu.wgpuTextureCreateView(d, &.{
+            .format = wgpu.WGPUTextureFormat_Undefined,
+            .dimension = wgpu.WGPUTextureViewDimension_Undefined,
+            .baseMipLevel = 0,
+            .mipLevelCount = wgpu.WGPU_MIP_LEVEL_COUNT_UNDEFINED,
+            .baseArrayLayer = 0,
+            .arrayLayerCount = wgpu.WGPU_ARRAY_LAYER_COUNT_UNDEFINED,
+            .aspect = wgpu.WGPUTextureAspect_All,
+            .usage = wgpu.WGPUTextureUsage_None
+        }) orelse return error.CreateTextureViewFailed;
+        errdefer wgpu.wgpuTextureViewRelease(depth_view);
+    }
+
     const encoder = wgpu.wgpuDeviceCreateCommandEncoder(interface.device, &.{}) orelse return error.CreateEncoderFailed;
     errdefer wgpu.wgpuCommandEncoderRelease(encoder);
 
@@ -49,7 +65,14 @@ fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture)) !Self 
             .depthSlice = wgpu.WGPU_DEPTH_SLICE_UNDEFINED,
             .loadOp = wgpu.WGPULoadOp_Clear,
             .storeOp = wgpu.WGPUStoreOp_Store
-        }}
+        }},
+        .depthStencilAttachment = if (depth) |_| &.{
+            .view = depth_view,
+            .depthLoadOp = wgpu.WGPULoadOp_Clear,
+            .depthStoreOp = wgpu.WGPUStoreOp_Store,
+            .depthClearValue = 1.0,
+            .depthReadOnly = @intFromBool(false)
+        } else null
     }) orelse return error.CreateRenderPassFailed;
 
     return .{
@@ -62,7 +85,11 @@ fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture)) !Self 
 }
 
 pub fn init(interface: *Interface, target: Texture) !Self {
-    return initInner(interface, target.inner);
+    return initInner(interface, target.inner, null);
+}
+
+pub fn initWithDepth(interface: *Interface, target: Texture, depth: Texture) !Self {
+    return initInner(interface, target.inner, depth.inner);
 }
 
 pub fn fromSurface(surface: *Surface) !Self {
@@ -72,7 +99,8 @@ pub fn fromSurface(surface: *Surface) !Self {
         break :b texture.texture orelse return error.CreateTextureFailed;
     };
 
-    return initInner(surface.interface, target);
+    return if (surface.depth) |depth| initInner(surface.interface, target, depth.inner)
+         else initInner(surface.interface, target, null);
 }
 
 fn assertCanDraw(self: *Self) !util.Known(wgpu.WGPURenderPassEncoder) {
