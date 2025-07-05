@@ -1,10 +1,13 @@
+const std = @import("std");
 const wgpu = @import("wgpu");
 const util = @import("./util.zig");
 const enums = @import("./enums.zig");
 const Interface = @import("./interface.zig");
-const Window = @import("./window.zig");
-const Buffer = @import("./buffer.zig");
+const Surface = @import("./surface.zig");
+const Buffer = @import("./buffer.zig").Buffer;
 const RenderPipeline = @import("./render_pipeline.zig");
+const Texture = @import("./texture.zig");
+const BindGroup = @import("./bind_group.zig");
 
 pub const Usage = enums.TextureUsage;
 
@@ -14,6 +17,7 @@ target: util.Known(wgpu.WGPUTexture),
 view: util.Known(wgpu.WGPUTextureView),
 encoder: util.Known(wgpu.WGPUCommandEncoder),
 pass: wgpu.WGPURenderPassEncoder,
+pipeline_set: bool = false,
 
 pub fn deinit(self: *Self) void {
     if (self.pass) |pass| wgpu.wgpuRenderPassEncoderRelease(pass);
@@ -22,7 +26,7 @@ pub fn deinit(self: *Self) void {
     wgpu.wgpuTextureRelease(self.target);
 }
 
-fn _initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture)) !Self {
+fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture)) !Self {
     const view = wgpu.wgpuTextureCreateView(target, &.{
         .format = wgpu.WGPUTextureFormat_Undefined,
         .dimension = wgpu.WGPUTextureViewDimension_Undefined,
@@ -57,74 +61,76 @@ fn _initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture)) !Self
     };
 }
 
-pub const Layout = struct {
-    width: u32,
-    height: u32,
-    format: enums.TextureFormat = .bgra8_unorm_srgb
-    // usage: enums.TextureUsage,
-    // format: enums.TextureFormat
-};
-
-pub fn init(interface: *Interface, layout: Layout) !Self {
-    const target: util.Known(wgpu.WGPUTexture) = wgpu.wgpuDeviceCreateTexture(interface.device, &.{
-        // .usage = layout.usage,
-        .usage = 17,
-        .dimension = wgpu.WGPUTextureDimension_2D,
-        .size = .{ .width = layout.width, .height = layout.height, .depthOrArrayLayers = 1 },
-        .format = @intFromEnum(layout.format),
-        .mipLevelCount = 1,
-        .sampleCount = 1
-    }) orelse return error.CreateTextureFailed;
-    errdefer wgpu.wgpuTextureRelease(target);
-
-    return try _initInner(interface, target);
+pub fn init(interface: *Interface, target: Texture) !Self {
+    return initInner(interface, target.inner);
 }
 
-pub fn fromWindow(window: Window) !Self {
+pub fn fromSurface(surface: *Surface) !Self {
     const target: util.Known(wgpu.WGPUTexture) = b: {
         var texture: wgpu.WGPUSurfaceTexture = undefined;
-        wgpu.wgpuSurfaceGetCurrentTexture(window.surface, &texture);
+        wgpu.wgpuSurfaceGetCurrentTexture(surface.inner, &texture);
         break :b texture.texture orelse return error.CreateTextureFailed;
     };
-    errdefer wgpu.wgpuTextureRelease(target);
 
-    return try _initInner(&(window.interface), target);
+    return initInner(surface.interface, target);
 }
 
-pub fn setPipeline(self: *Self, pipeline: RenderPipeline) void {
-    wgpu.wgpuRenderPassEncoderSetPipeline(self.pass.?, pipeline.inner);
+fn assertCanDraw(self: *Self) !util.Known(wgpu.WGPURenderPassEncoder) {
+    if (self.pass) |pass| {
+        if (!self.pipeline_set) return error.NoCanvasSource;
+        return pass;
+    } else return error.CanvasDrawingFinished;
 }
 
-pub fn draw(self: *Self) void {
-    wgpu.wgpuRenderPassEncoderDraw(self.pass.?, 3, 1, 0, 0);
+pub fn source(self: *Self, pipeline: RenderPipeline) !void {
+    if (self.pass) |pass| {
+        wgpu.wgpuRenderPassEncoderSetPipeline(pass, pipeline.inner);
+        self.pipeline_set = true;
+    } else return error.CanvasDrawingFinished;
 }
 
-pub fn copyToBuffer(self: *Self, buffer: *Buffer, bpr_temp: u32) void {
-    wgpu.wgpuCommandEncoderCopyTextureToBuffer(self.encoder, &.{
-        .texture = self.target,
-        .mipLevel = 0,
-        .origin = .{},
-        .aspect = wgpu.WGPUTextureAspect_All
-    }, &.{
-        .buffer = buffer.inner,
-        .layout = .{
-            .offset = 0,
-            .bytesPerRow = bpr_temp,
-            .rowsPerImage = wgpu.wgpuTextureGetHeight(self.target)
-        }
-    }, &.{
-        .height = wgpu.wgpuTextureGetHeight(self.target),
-        .width = wgpu.wgpuTextureGetWidth(self.target),
-        .depthOrArrayLayers = wgpu.wgpuTextureGetDepthOrArrayLayers(self.target)
-    });
+pub fn bind(self: *Self, num: u32, binding: BindGroup) !void {
+    const pass = try self.assertCanDraw();
+    wgpu.wgpuRenderPassEncoderSetBindGroup(pass, num, binding.inner, 0, null);
 }
 
-pub fn end(self: *Self) void {
-    wgpu.wgpuRenderPassEncoderEnd(self.pass);
-    self.pass = null;
+pub fn drawGenerated(self: *Self, start: u32, len: u32) !void {
+    const pass = try self.assertCanDraw();
+    wgpu.wgpuRenderPassEncoderDraw(pass, len, 1, start, 0);
+}
+
+pub fn draw(self: *Self, comptime T: type, vertices: Buffer(.vertex, T)) !void {
+    try self.drawSlice(vertices, 0, vertices.len);
+}
+
+pub fn drawSlice(self: *Self, comptime T: type, vertices: Buffer(.vertex, T), start: u32, len: u32) !void {
+    const pass = try self.assertCanDraw();
+    wgpu.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, vertices.inner, 0, vertices.size);
+    wgpu.wgpuRenderPassEncoderDraw(pass, len, 0, start, 0);
+}
+
+pub fn drawIndexed(self: *Self, comptime T: type, vertices: Buffer(.vertex, T), indices: Buffer(.index, u32)) !void {
+    try self.drawIndexedSlice(vertices, indices, 0, indices.len);
+}
+
+pub fn drawIndexedSlice(self: *Self, comptime T: type, vertices: Buffer(.vertex, T), indices: Buffer(.index, u32), start: u32, len: u32) !void {
+    const pass = try self.assertCanDraw();
+    wgpu.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, vertices.inner, 0, vertices.size);
+    wgpu.wgpuRenderPassEncoderSetIndexBuffer(pass, 0, indices.inner, wgpu.WGPUIndexFormat_Uint32, 0, indices.size);
+    wgpu.wgpuRenderPassEncoderDraw(pass, vertices.len, len, 0, start);
+}
+
+pub fn finishDrawing(self: *Self) !void {
+    if (self.pass) |pass| {
+        wgpu.wgpuRenderPassEncoderEnd(pass);
+        wgpu.wgpuRenderPassEncoderRelease(pass);
+        self.pass = null;
+        self.pipeline_set = false;
+    }
 }
 
 pub fn submit(self: *Self) !void {
+    if (self.pass != null) return error.CanvassDrawingNotFinished;
     defer self.deinit();
 
     const commands = wgpu.wgpuCommandEncoderFinish(self.encoder, &.{}) orelse return error.CommandEncodingError;
@@ -132,8 +138,4 @@ pub fn submit(self: *Self) !void {
 
     const queue = [_]wgpu.WGPUCommandBuffer{commands};
     wgpu.wgpuQueueSubmit(self.interface.queue, queue.len, &queue);
-    // switch (wgpu.wgpuSurfacePresent(self.canvas.surface)) {
-    //     .success => {},
-    //     else => return error.PresentationError
-    // }
 }

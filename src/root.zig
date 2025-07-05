@@ -6,4 +6,5 @@ pub const Interface = @import("./interface.zig");
 pub const Pipeline = struct {
     pub const Render = @import("./render_pipeline.zig");
 };
+pub const Surface = @import("./surface.zig");
 pub const Texture = @import("./texture.zig");
