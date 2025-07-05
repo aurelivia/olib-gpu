@@ -69,6 +69,9 @@ pub fn init() !Self {
 
     const queue = wgpu.wgpuDeviceGetQueue(device) orelse return error.CreateQueueFailed;
 
+    wgpu.wgpuSetLogCallback(logCallback, null);
+    wgpu.wgpuSetLogLevel(2);
+
     return .{
         .instance = instance,
         .adapter = adapter,
@@ -132,7 +135,7 @@ fn deviceLost(
         else => "Unknown"
     };
 
-    std.debug.panic("Device Lost: {s}, Message: \"{s}\"\n", .{ r, util.fromStringView(message) orelse "" });
+    std.debug.panic("Device Lost: {s}, Message: {s}\n", .{ r, util.fromStringView(message) orelse "" });
 }
 
 fn deviceUncapturedError(
@@ -149,5 +152,10 @@ fn deviceUncapturedError(
         else => "Unknown"
     };
 
-    std.debug.panic("Device Uncaptured Error: {s}, Message: \"{s}\"\n", .{ e, util.fromStringView(message) orelse "" });
+    std.debug.panic("Device Uncaptured Error: {s}, Message: {s}\n", .{ e, util.fromStringView(message) orelse "" });
+}
+
+fn logCallback(level: wgpu.WGPULogLevel, message: wgpu.WGPUStringView, _: ?*anyopaque) callconv(.C) void {
+    _ = level;
+    std.debug.print("{s}\n", .{ util.fromStringView(message) orelse "" });
 }

@@ -3,17 +3,9 @@ const wgpu = @import("wgpu");
 const util = @import("./util.zig");
 const enums = @import("./enums.zig");
 const Interface = @import("./interface.zig");
-const Shader = @import("./shader.zig");
+const BindGroup = @import("./bind_group.zig");
 
 const Self = @This();
-
-pub const VertexStage = struct {
-    entry: []const u8 = "vert",
-    vertex_type: ?type = null,
-    topology: enums.Topology = .triangle_list,
-    clockwise: bool = false,
-    cull_mode: enums.CullMode = .back
-};
 
 pub const BlendComponent = struct {
     op: enums.BlendOperation,
@@ -87,64 +79,85 @@ pub const ColorMask = enum (wgpu.WGPUColorWriteMask) {
     pub fn isNot(a: ColorMask, b: ColorMask) bool { return !a.is(b); }
 };
 
-pub const Target = struct {
-    format: enums.TextureFormat = .bgra8_unorm_srgb,
-    blend: ?BlendState,
-    mask: ColorMask = ColorMask.all
-};
-
-pub const FragmentStage = struct {
-    entry: []const u8 = "frag",
-    target: Target
-    // targets: []Target
-};
-
-pub const Layout = struct {
-    vertex: ?VertexStage = null,
-    fragment: FragmentStage
-};
-
 inner: util.Known(wgpu.WGPURenderPipeline),
+shader: util.Known(wgpu.WGPUShaderModule),
 
 pub fn deinit(self: *Self) void {
     wgpu.wgpuRenderPipelineRelease(self.inner);
+    wgpu.wgpuShaderModuleRelease(self.shader);
 }
 
-pub fn init(interface: *Interface, shader: Shader, comptime layout: Layout) !Self {
+pub const Target = struct {
+    format: enums.TextureFormat,
+    blend: ?BlendState = null,
+    mask: ColorMask = ColorMask.all
+};
+
+pub const Layout = struct {
+    source: []const u8,
+    bind_groups: []const BindGroup.Layout = &[0]BindGroup.Layout{},
+    vertex: ?struct {
+        entry: []const u8 = "vert",
+        vertex_type: ?type = null,
+        topology: enums.Topology = .triangle_list,
+        clockwise: bool = false,
+        cull_mode: enums.CullMode = .back
+    } = null,
+    depth: bool = true,
+    fragment: struct {
+        entry: []const u8 = "frag",
+        targets: []const Target
+    }
+};
+
+pub fn init(interface: *Interface, comptime layout: Layout) !Self {
+    const shader = wgpu.wgpuDeviceCreateShaderModule(interface.device, &.{
+        .nextInChain = @ptrCast(&wgpu.WGPUShaderSourceWGSL{
+            .chain = .{ .sType = wgpu.WGPUSType_ShaderSourceWGSL },
+            .code = util.toStringView(layout.source)
+        })
+    }) orelse return error.CreateShaderFailed;
+    errdefer wgpu.wgpuShaderModuleRelease(shader);
+
+    var bg_layouts: [layout.bind_groups.len]wgpu.WGPUBindGroupLayout = undefined;
+    inline for (layout.bind_groups, 0..) |bg, i| bg_layouts[i] = try BindGroup.instantiateLayout(interface, bg);
+    defer inline for (bg_layouts) |bg| wgpu.wgpuBindGroupLayoutRelease(bg);
+
     const pipeline_layout = wgpu.wgpuDeviceCreatePipelineLayout(interface.device, &.{
-        .bindGroupLayoutCount = 0,
-        .bindGroupLayouts = &[_]wgpu.WGPUBindGroupLayout{}
+        .bindGroupLayoutCount = layout.bind_groups.len,
+        .bindGroupLayouts = &bg_layouts
     }) orelse return error.CreatePipelineLayoutFailed;
     defer wgpu.wgpuPipelineLayoutRelease(pipeline_layout);
+
+    var targets: [layout.fragment.targets.len]wgpu.WGPUColorTargetState = undefined;
+    inline for (layout.fragment.targets, 0..) |target, i| targets[i] = .{
+        .format = @intFromEnum(target.format),
+        .blend = if (target.blend) |b| &getBlendState(b) else null,
+        .writeMask = @intFromEnum(target.mask)
+    };
 
     const inner = wgpu.wgpuDeviceCreateRenderPipeline(interface.device, &.{
         .layout = pipeline_layout,
         .vertex = if (layout.vertex) |vert_layout| .{
-            .module = shader.inner,
+            .module = shader,
             .entryPoint = util.toStringView(vert_layout.entry),
-            .bufferCount = 0,
-            .buffers = if (vert_layout.vertex_type) |vt|
+            .bufferCount = if (vert_layout.vertex_type != null) 1 else 0,
+            .buffers = if (vert_layout.vertex_type) |vertex_type|
                 &[_]wgpu.WGPUVertexBufferLayout{
-                    layoutFor(vt)
+                    layoutFor(vertex_type)
                 }
-            else &[0]wgpu.WGPUVertexBufferLayout{}
+            else null
         } else .{},
         .primitive = if (layout.vertex) |vert_layout| .{
             .topology = @intFromEnum(vert_layout.topology),
             .frontFace = if (vert_layout.clockwise) wgpu.WGPUFrontFace_CW else wgpu.WGPUFrontFace_CCW,
             .cullMode = @intFromEnum(vert_layout.cull_mode)
-        } else .{},
+        } else null,
         .fragment = &.{
-            .module = shader.inner,
+            .module = shader,
             .entryPoint = util.toStringView(layout.fragment.entry),
-            .targetCount = 1,
-            .targets = &[_]wgpu.WGPUColorTargetState{.{
-                .format = @intFromEnum(layout.fragment.target.format),
-                .blend = if (layout.fragment.target.blend) |b| &getBlendState(b) else null,
-                .writeMask = @intFromEnum(layout.fragment.target.mask)
-            }}
-            // .targetCount = lay.targets.len,
-            // .targets = lay.targets.ptr
+            .targetCount = layout.fragment.targets.len,
+            .targets = &targets
         },
         .multisample = .{
             .count = 1,
@@ -153,7 +166,10 @@ pub fn init(interface: *Interface, shader: Shader, comptime layout: Layout) !Sel
         }
     }) orelse return error.CreatePipelineFailed;
 
-    return .{ .inner = inner };
+    return .{
+        .inner = inner,
+        .shader = shader
+    };
 }
 
 inline fn layoutFor(comptime T: type) wgpu.WGPUVertexBufferLayout {

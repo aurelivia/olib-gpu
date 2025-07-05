@@ -87,7 +87,8 @@ fn buildEnum(comptime tag_type: type, comptime prefix: [:0]const u8, comptime ex
             const name = d.name[prefix.len..d.name.len];
             if (!contains(exclude, name)) {
                 fields[i] = .{
-                    .name = snakeCase(d.name[prefix.len..d.name.len]),
+                    .name = if (std.mem.eql(u8, name, "Undefined")) "none"
+                        else snakeCase(name),
                     .value = @field(wgpu, d.name)
                 };
                 i += 1;
@@ -106,9 +107,6 @@ fn buildEnum(comptime tag_type: type, comptime prefix: [:0]const u8, comptime ex
     return @Type(.{ .@"enum" = T });
 }
 
-pub const TextureUsage = buildEnum(wgpu.WGPUTextureUsage, "WGPUTextureUsage_", 6, &[_][:0]const u8 {
-    "Undefined", "Force32"
-});
 pub const TextureFormat = buildEnum(wgpu.WGPUTextureFormat, "WGPUTextureFormat_", &[_][:0]const u8 {
     "Undefined", "Force32"
 });
@@ -123,4 +121,14 @@ pub const BlendOperation = buildEnum(wgpu.WGPUBlendOperation, "WGPUBlendOperatio
 });
 pub const BlendFactor = buildEnum(wgpu.WGPUBlendFactor, "WGPUBlendFactor_", &[_][:0]const u8 {
     "Undefined", "Force32"
+});
+pub const AddressMode = buildEnum(wgpu.WGPUAddressMode, "WGPUAddressMode_", &[_][:0]const u8 {
+    "Undefined", "Force32"
+});
+pub const FilterMode = buildEnum(wgpu.WGPUFilterMode, "WGPUFilterMode_", &[_][:0]const u8 {
+    "Undefined", "Force32"
+});
+pub const BufferBindingType = buildEnum(wgpu.WGPUBufferBindingType, "WGPUBufferBindingType_", &[_][:0]const u8 {
+    "Undefined", "Force32"
+});
 });
