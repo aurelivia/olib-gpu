@@ -6,12 +6,13 @@ const BindGroup = @import("./bind_group.zig");
 const log = std.log.scoped(.@"olib-gpu");
 
 pub const Type = enum {
-    vertex, index,
+    vertex, index, instance,
     uniform, storage,
     staging, input, output
 };
 
 pub const IndexBuffer = Buffer(.index, u32);
+pub const InstanceBuffer = Buffer(.instance, [4]@Vector(4, f32));
 
 pub fn Buffer(comptime BufType: Type, comptime T: type) type { return struct {
     const Self = @This();
@@ -20,6 +21,7 @@ pub fn Buffer(comptime BufType: Type, comptime T: type) type { return struct {
 
     comptime {
         if (BufType == .index and T != u16 and T != u32) @compileError("Index buffers require u16 or u32 elements.");
+        if (BufType == .instance and T != [4]@Vector(4, f32)) @compileError("Instance buffers require 4x4 matrix elements.");
         switch (@typeInfo(T)) {
             .@"struct" => |s| if (s.layout == .auto) @compileError("Buffers containing structs must have non-auto layout."),
             else => {}
@@ -34,6 +36,14 @@ pub fn Buffer(comptime BufType: Type, comptime T: type) type { return struct {
     const write_mapped = switch (BufType) {
         .input => true,
         else => false
+    };
+
+    pub const Slice = struct {
+        source: *Self,
+        start: u32 = 0,
+        byte_start: u32 = 0,
+        len: u32,
+        byte_len: u32
     };
 
     interface: *Interface,
@@ -77,6 +87,7 @@ pub fn Buffer(comptime BufType: Type, comptime T: type) type { return struct {
 
         const usage: wgpu.WGPUBufferUsage = switch (BufType) {
             .vertex   => wgpu.WGPUBufferUsage_Vertex   | wgpu.WGPUBufferUsage_CopySrc | wgpu.WGPUBufferUsage_CopyDst,
+            .instance => wgpu.WGPUBufferUsage_Vertex   | wgpu.WGPUBufferUsage_CopySrc | wgpu.WGPUBufferUsage_CopyDst,
             .index    => wgpu.WGPUBufferUsage_Index    | wgpu.WGPUBufferUsage_CopySrc | wgpu.WGPUBufferUsage_CopyDst,
             .uniform  => wgpu.WGPUBufferUsage_Uniform  | wgpu.WGPUBufferUsage_CopySrc | wgpu.WGPUBufferUsage_CopyDst,
             .storage  => wgpu.WGPUBufferUsage_Storage  | wgpu.WGPUBufferUsage_CopySrc | wgpu.WGPUBufferUsage_CopyDst,
@@ -211,6 +222,24 @@ pub fn Buffer(comptime BufType: Type, comptime T: type) type { return struct {
         try self.ensureTotalCapacityPrecise(items.len);
         std.debug.assert(items.len <= std.math.maxInt(u32));
         self.replaceRangeAssumeCapacity(0, @intCast(items.len), items);
+    }
+
+    pub fn slice(self: *Self, start: u32, len: u32) Self.Slice {
+        return .{
+            .source = self,
+            .start = start,
+            .byte_start = start * @sizeOf(T),
+            .len = len,
+            .byte_len = len * @sizeOf(T)
+        };
+    }
+
+    pub fn from(self: *Self, start: u32) Self.Slice {
+        return self.slice(start, self.len);
+    }
+
+    pub fn all(self: *Self) Self.Slice {
+        return self.slice(0, self.len);
     }
 
     fn map(self: *Self) void {

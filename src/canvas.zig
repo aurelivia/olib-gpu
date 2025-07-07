@@ -5,6 +5,8 @@ const enums = @import("./enums.zig");
 const Interface = @import("./interface.zig");
 const Surface = @import("./surface.zig");
 const Buffer = @import("./buffer.zig").Buffer;
+const IndexBuffer = @import("./buffer.zig").IndexBuffer;
+const InstanceBuffer = @import("./buffer.zig").InstanceBuffer;
 const RenderPipeline = @import("./render_pipeline.zig");
 const Texture = @import("./texture.zig");
 const BindGroup = @import("./bind_group.zig");
@@ -79,6 +81,7 @@ fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture), depth:
         .interface = interface,
         .target = target,
         .view = view,
+        .depth_view = depth_view,
         .encoder = encoder,
         .pass = pass
     };
@@ -127,26 +130,22 @@ pub fn drawGenerated(self: *Self, start: u32, len: u32) !void {
     wgpu.wgpuRenderPassEncoderDraw(pass, len, 1, start, 0);
 }
 
-pub fn draw(self: *Self, comptime T: type, vertices: Buffer(.vertex, T)) !void {
-    try self.drawSlice(vertices, 0, vertices.len);
-}
-
-pub fn drawSlice(self: *Self, comptime T: type, vertices: Buffer(.vertex, T), start: u32, len: u32) !void {
+pub fn draw(self: *Self, comptime T: type,
+    vertices: Buffer(.vertex, T).Slice,
+    indexes: ?IndexBuffer.Slice,
+    instances: ?InstanceBuffer.Slice
+) !void {
     const pass = try self.assertCanDraw();
-    wgpu.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, vertices.inner, 0, vertices.size);
-    wgpu.wgpuRenderPassEncoderDraw(pass, len, 0, start, 0);
+    wgpu.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, vertices.source.inner, vertices.byte_start, vertices.byte_len);
+    const instance_start: u32 = if (instances) |i| i.start else 0;
+    const instance_len: u32 = if (instances) |i| i.len else 1;
+    if (instances) |i| wgpu.wgpuRenderPassEncoderSetVertexBuffer(pass, 1, i.source.inner, i.byte_start, i.byte_len);
+    if (indexes) |i| {
+        wgpu.wgpuRenderPassEncoderSetIndexBuffer(pass, i.source.inner, wgpu.WGPUIndexFormat_Uint32, i.byte_start, i.byte_len);
+        wgpu.wgpuRenderPassEncoderDrawIndexed(pass, i.len, instance_len, i.start, 0, instance_start);
+    } else wgpu.wgpuRenderPassEncoderDraw(pass, vertices.len, instance_len, vertices.start, instance_start);
 }
 
-pub fn drawIndexed(self: *Self, comptime T: type, vertices: Buffer(.vertex, T), indices: Buffer(.index, u32)) !void {
-    try self.drawIndexedSlice(vertices, indices, 0, indices.len);
-}
-
-pub fn drawIndexedSlice(self: *Self, comptime T: type, vertices: Buffer(.vertex, T), indices: Buffer(.index, u32), start: u32, len: u32) !void {
-    const pass = try self.assertCanDraw();
-    wgpu.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, vertices.inner, 0, vertices.size);
-    wgpu.wgpuRenderPassEncoderSetIndexBuffer(pass, 0, indices.inner, wgpu.WGPUIndexFormat_Uint32, 0, indices.size);
-    wgpu.wgpuRenderPassEncoderDraw(pass, vertices.len, len, 0, start);
-}
 
 pub fn finishDrawing(self: *Self) !void {
     if (self.pass) |pass| {

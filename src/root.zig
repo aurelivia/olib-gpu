@@ -3,6 +3,7 @@ const buffer = @import("./buffer.zig");
 pub const Buffer = struct {
     pub fn Vertex(comptime T: type) type { return buffer.Buffer(.vertex, T); }
     pub const Index = buffer.IndexBuffer;
+    pub const Instance = buffer.InstanceBuffer;
     pub fn Uniform(comptime T: type) type { return buffer.Buffer(.uniform, T); }
     pub fn Storage(comptime T: type) type { return buffer.Buffer(.storage, T); }
     pub fn Staging(comptime T: type) type { return buffer.Buffer(.staging, T); }

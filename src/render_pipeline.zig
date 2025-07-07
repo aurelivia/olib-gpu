@@ -99,6 +99,7 @@ pub const Layout = struct {
     vertex: ?struct {
         entry: []const u8 = "vert",
         vertex_type: ?type = null,
+        instanced: bool = false,
         topology: enums.Topology = .triangle_list,
         clockwise: bool = false,
         cull_mode: enums.CullMode = .back
@@ -136,18 +137,31 @@ pub fn init(interface: *Interface, comptime layout: Layout) !Self {
         .writeMask = @intFromEnum(target.mask)
     };
 
+    var loc: u32 = 0;
+    const buffers: ?[]wgpu.WGPUVertexBufferLayout = b: {
+        if (layout.vertex) |vert_layout| {
+            if (vert_layout.vertex_type) |vertex_type| {
+                if (vert_layout.instanced) {
+                    loc, const verts = layoutFor(loc, vert_layout.vertex_type.?, wgpu.WGPUVertexStepMode_Vertex);
+                    _, const insts = layoutFor(loc, [4]@Vector(4, f32), wgpu.WGPUVertexStepMode_Instance);
+                    break :b @constCast(&[2]wgpu.WGPUVertexBufferLayout{ verts, insts });
+                } else {
+                    _, const verts = layoutFor(loc, vertex_type, wgpu.WGPUVertexStepMode_Vertex);
+                    break :b @constCast(&[1]wgpu.WGPUVertexBufferLayout{ verts });
+                }
+            }
+        }
+        break :b null;
+    };
+
     const inner = wgpu.wgpuDeviceCreateRenderPipeline(interface.device, &.{
         .layout = pipeline_layout,
         .vertex = if (layout.vertex) |vert_layout| .{
             .module = shader,
             .entryPoint = util.toStringView(vert_layout.entry),
-            .bufferCount = if (vert_layout.vertex_type != null) 1 else 0,
-            .buffers = if (vert_layout.vertex_type) |vertex_type|
-                &[_]wgpu.WGPUVertexBufferLayout{
-                    layoutFor(vertex_type)
-                }
-            else null
-        } else .{},
+            .bufferCount = if (buffers) |b| b.len else 0,
+            .buffers = if (buffers) |b| b.ptr else null
+        } else null,
         .primitive = if (layout.vertex) |vert_layout| .{
             .topology = @intFromEnum(vert_layout.topology),
             .frontFace = if (vert_layout.clockwise) wgpu.WGPUFrontFace_CW else wgpu.WGPUFrontFace_CCW,
@@ -194,70 +208,94 @@ pub fn init(interface: *Interface, comptime layout: Layout) !Self {
     };
 }
 
-inline fn layoutFor(comptime T: type) wgpu.WGPUVertexBufferLayout {
-    return switch (@typeInfo(T)) {
-        .int, .float, .array => .{
-            .stepMode = wgpu.WGPUVertexStepMode_Vertex,
-            .arrayStride = @bitSizeOf(T),
+inline fn layoutFor(
+    start: u32, comptime T: type,
+    comptime step_mode: wgpu.WGPUVertexStepMode
+) struct { u32, wgpu.WGPUVertexBufferLayout } {
+    var loc: u32 = start;
+    const layout: wgpu.WGPUVertexBufferLayout = switch (@typeInfo(T)) {
+        .int, .float, .vector => .{
+            .stepMode = step_mode,
+            .arrayStride = @sizeOf(T),
             .attributeCount = 1,
             .attributes = &[_]wgpu.WGPUVertexAttribute{.{
-                .shaderLocation = 0,
+                .shaderLocation = s: { loc += 1; break :s loc - 1; },
                 .offset = 0,
-                .format = comptime formatFor(T)
+                .format = formatFor(T)
             }}
         },
-        .@"struct" => |s| b: {
-            if (s.layout == .auto) @compileError("Vertex struct must have known layout (extern or packed).");
-            var attrs: [s.fields.len]wgpu.WGPUVertexAttribute = undefined;
-            inline for (s.fields, 0..) |field, i| {
+        .array => |a| b: {
+            var attrs: [a.len]wgpu.WGPUVertexAttribute = undefined;
+            inline for (0..a.len) |i| {
                 attrs[i] = .{
-                    .shaderLocation = i,
-                    .offset = @bitOffsetOf(T, field.name),
-                    .format = comptime formatFor(field.type)
+                    .shaderLocation = loc,
+                    .offset = @sizeOf(a.child) * i,
+                    .format = formatFor(a.child)
                 };
+                loc += 1;
             }
 
             break :b .{
-                .stepMode = wgpu.WGPUVertexStepMode_Vertex,
-                .arrayStride = @bitSizeOf(T),
-                .attributeCount = 1,
+                .stepMode = step_mode,
+                .arrayStride = @sizeOf(T),
+                .attributeCount = attrs.len,
+                .attributes = &attrs
+            };
+        },
+        .@"struct" => |s| b: {
+            if (s.layout == .auto) @compileError("Vertex struct must have non-auto layout.");
+            var attrs: [s.fields.len]wgpu.WGPUVertexAttribute = undefined;
+            inline for (s.fields, 0..) |field, i| {
+                attrs[i] = .{
+                    .shaderLocation = loc,
+                    .offset = @offsetOf(T, field.name),
+                    .format = formatFor(field.type)
+                };
+                loc += 1;
+            }
+
+            break :b .{
+                .stepMode = step_mode,
+                .arrayStride = @sizeOf(T),
+                .attributeCount = attrs.len,
                 .attributes = &attrs
             };
         },
         else => @compileError(std.fmt.comptimePrint("Unsupported vertex type: {s}", .{ @typeName(T) }))
     };
+    return .{ loc, layout };
 }
 
 inline fn formatFor(comptime T: type) wgpu.WGPUVertexFormat {
     return switch (T) {
         u8 => wgpu.WGPUVertexFormat_Uint8,
-        [2]u8 => wgpu.WGPUVertexFormat_Uint8x2,
-        [4]u8 => wgpu.WGPUVertexFormat_Uint8x4,
+        @Vector(2, u8) => wgpu.WGPUVertexFormat_Uint8x2,
+        @Vector(4, u8) => wgpu.WGPUVertexFormat_Uint8x4,
         u16 => wgpu.WGPUVertexFormat_Uint16,
-        [2]u16 => wgpu.WGPUVertexFormat_Uint16x2,
-        [4]u16 => wgpu.WGPUVertexFormat_Uint16x4,
+        @Vector(2, u16) => wgpu.WGPUVertexFormat_Uint16x2,
+        @Vector(4, u16) => wgpu.WGPUVertexFormat_Uint16x4,
         u32 => wgpu.WGPUVertexFormat_Uint32,
-        [2]u32 => wgpu.WGPUVertexFormat_Uint32x2,
-        [3]u32 => wgpu.WGPUVertexFormat_Uint32x3,
-        [4]u32 => wgpu.WGPUVertexFormat_Uint32x4,
+        @Vector(2, u32) => wgpu.WGPUVertexFormat_Uint32x2,
+        @Vector(3, u32) => wgpu.WGPUVertexFormat_Uint32x3,
+        @Vector(4, u32) => wgpu.WGPUVertexFormat_Uint32x4,
         i8 => wgpu.WGPUVertexFormat_Sint8,
-        [2]i8 => wgpu.WGPUVertexFormat_Sint8x2,
-        [4]i8 => wgpu.WGPUVertexFormat_Sint8x4,
+        @Vector(2, i8) => wgpu.WGPUVertexFormat_Sint8x2,
+        @Vector(4, i8) => wgpu.WGPUVertexFormat_Sint8x4,
         i16 => wgpu.WGPUVertexFormat_Sint16,
-        [2]i16 => wgpu.WGPUVertexFormat_Sint16x2,
-        [4]i16 => wgpu.WGPUVertexFormat_Sint16x4,
+        @Vector(2, i16) => wgpu.WGPUVertexFormat_Sint16x2,
+        @Vector(4, i16) => wgpu.WGPUVertexFormat_Sint16x4,
         i32 => wgpu.WGPUVertexFormat_Sint32,
-        [2]i32 => wgpu.WGPUVertexFormat_Sint32x2,
-        [3]i32 => wgpu.WGPUVertexFormat_Sint32x3,
-        [4]i32 => wgpu.WGPUVertexFormat_Sint32x4,
+        @Vector(2, i32) => wgpu.WGPUVertexFormat_Sint32x2,
+        @Vector(3, i32) => wgpu.WGPUVertexFormat_Sint32x3,
+        @Vector(4, i32) => wgpu.WGPUVertexFormat_Sint32x4,
         f16 => wgpu.WGPUVertexFormat_Float16,
-        [2]f16 => wgpu.WGPUVertexFormat_Float16x2,
-        [3]f16 => wgpu.WGPUVertexFormat_Float16x3,
-        [4]f16 => wgpu.WGPUVertexFormat_Float16x4,
+        @Vector(2, f16) => wgpu.WGPUVertexFormat_Float16x2,
+        @Vector(3, f16) => wgpu.WGPUVertexFormat_Float16x3,
+        @Vector(4, f16) => wgpu.WGPUVertexFormat_Float16x4,
         f32 => wgpu.WGPUVertexFormat_Float32,
-        [2]f32 => wgpu.WGPUVertexFormat_Float32x2,
-        [3]f32 => wgpu.WGPUVertexFormat_Float32x3,
-        [4]f32 => wgpu.WGPUVertexFormat_Float32x4,
+        @Vector(2, f32) => wgpu.WGPUVertexFormat_Float32x2,
+        @Vector(3, f32) => wgpu.WGPUVertexFormat_Float32x3,
+        @Vector(4, f32) => wgpu.WGPUVertexFormat_Float32x4,
         else => @compileError(std.fmt.comptimePrint("Unsupported vertex type: {s}", .{ @typeName(T) }))
     };
 }
