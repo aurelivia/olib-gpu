@@ -16,7 +16,22 @@ pub fn deinit(self: *Self) void {
     wgpu.wgpuInstanceRelease(self.instance);
 }
 
-pub fn init() !Self {
+pub const Backend = enum (wgpu.WGPUBackendType) {
+    any = wgpu.WGPUBackendType_Undefined,
+    webgpu = wgpu.WGPUBackendType_WebGPU,
+    d3d11 = wgpu.WGPUBackendType_D3D11,
+    d3d12 = wgpu.WGPUBackendType_D3D12,
+    metal = wgpu.WGPUBackendType_Metal,
+    vulkan = wgpu.WGPUBackendType_Vulkan,
+    opengl = wgpu.WGPUBackendType_OpenGL,
+    opengles = wgpu.WGPUBackendType_OpenGLES
+};
+
+pub const Layout = struct {
+    backend: Backend = .any
+};
+
+pub fn init(comptime layout: Layout) !Self {
     const instance: util.Known(wgpu.WGPUInstance) = wgpu.wgpuCreateInstance(null) orelse return error.CreateInstanceFailed;
     errdefer wgpu.wgpuInstanceRelease(instance);
 
@@ -26,7 +41,7 @@ pub fn init() !Self {
         .featureLevel = wgpu.WGPUFeatureLevel_Core,
         .powerPreference = wgpu.WGPUPowerPreference_Undefined,
         .forceFallbackAdapter = @intFromBool(false),
-        .backendType = wgpu.WGPUBackendType_Undefined
+        .backendType = @intFromEnum(layout.backend)
     }, .{
         .mode = wgpu.WGPUCallbackMode_AllowProcessEvents,
         .callback = adapterCallback,
