@@ -2,6 +2,8 @@ const std = @import("std");
 const wgpu = @import("wgpu");
 const util = @import("./util.zig");
 const enums = @import("./enums.zig");
+const log = std.log.scoped(.@"olib-gpu");
+
 const Self = @This();
 const Interface = @import("./interface.zig");
 const Canvas = @import("./canvas.zig");
@@ -27,6 +29,7 @@ pub const Source = union (enum) {
 };
 
 pub fn init(interface: *Interface, source: Source, width: u32, height: u32, useDepth: bool) !Self {
+    log.info("Configuring surface for: {s}", .{ @tagName(source) });
     const desc: wgpu.WGPUSurfaceDescriptor = .{
         .nextInChain = switch (source) {
             .android_native => |win| @ptrCast(&wgpu.WGPUSurfaceSourceAndroidNativeWindow{
@@ -84,11 +87,13 @@ pub fn init(interface: *Interface, source: Source, width: u32, height: u32, useD
         }
         break :b if (best) |b| preference[b] else capabilities.formats[0];
     };
+    log.info("Surface color format set to: {s}", .{ @tagName(@as(enums.TextureFormat, @enumFromInt(format))) });
 
     const present_mode = for (0..capabilities.presentModeCount) |i| {
         const mode = capabilities.presentModes[i];
         if (mode == wgpu.WGPUPresentMode_Mailbox) break mode;
     } else wgpu.WGPUPresentMode_Fifo;
+    log.info("Surface present mode set to: {s}", .{ if (present_mode == wgpu.WGPUPresentMode_Mailbox) "Mailbox" else "FIFO" });
 
     const config: wgpu.WGPUSurfaceConfiguration = .{
         .device = interface.device,

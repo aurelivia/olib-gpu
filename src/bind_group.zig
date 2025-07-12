@@ -3,7 +3,7 @@ const wgpu = @import("wgpu");
 const util = @import("./util.zig");
 const enums = @import("./enums.zig");
 const Interface = @import("./interface.zig");
-const Buffer = @import("./buffer.zig").Buffer;
+const Slice = @import("./buffer/slice.zig");
 const Texture = @import("./texture.zig");
 
 pub const Self = @This();
@@ -47,10 +47,8 @@ inline fn entryLayout(comptime layout: Layout) type {
     var fields: [layout.len]std.builtin.Type.StructField = undefined;
     for (layout, 0..) |entry, i| {
         const T = switch (entry) {
-            .uniform => |e| Buffer(.uniform, e.elem_type),
-            .storage => |e| Buffer(.storage, e.elem_type),
-            .texture => Texture,
-            .sampler => Texture
+            .uniform, .storage => Slice,
+            .texture, .sampler => Texture
         };
 
         fields[i] = .{
@@ -141,8 +139,8 @@ inline fn entryFor(comptime binding: u32, comptime entry: Entry, value: anytype)
         .offset = 0,
         .size = wgpu.WGPU_WHOLE_SIZE,
         .buffer = switch (entry) {
-            .uniform => value.inner,
-            .storage => value.inner,
+            .uniform => value.source,
+            .storage => value.source,
             else => null
         },
         .sampler = switch (entry) {

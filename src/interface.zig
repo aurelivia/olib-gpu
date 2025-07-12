@@ -1,15 +1,23 @@
 const std = @import("std");
 const wgpu = @import("wgpu");
 const util = @import("./util.zig");
+const log = std.log.scoped(.@"olib-gpu");
+const wgpuLog = std.log.scoped(.wgpu);
+const MappedBuffer = @import("./buffer/mapped.zig");
 
 const Self = @This();
 
+mem: std.mem.Allocator,
 instance: util.Known(wgpu.WGPUInstance),
 adapter: util.Known(wgpu.WGPUAdapter),
 device: util.Known(wgpu.WGPUDevice),
 queue: util.Known(wgpu.WGPUQueue),
+encoder: util.Known(wgpu.WGPUCommandEncoder),
+
+buffer_mappings: std.ArrayListUnmanaged(*MappedBuffer.Inner),
 
 pub fn deinit(self: *Self) void {
+    wgpu.wgpuCommandEncoderRelease(self.encoder);
     wgpu.wgpuQueueRelease(self.queue);
     wgpu.wgpuDeviceRelease(self.device);
     wgpu.wgpuAdapterRelease(self.adapter);
@@ -28,10 +36,23 @@ pub const Backend = enum (wgpu.WGPUBackendType) {
 };
 
 pub const Layout = struct {
-    backend: Backend = .any
+    backend: Backend = .any,
+    log_level: std.log.Level =
+        if (std.log.logEnabled(.debug, .wgpu)) .debug
+        else if (std.log.logEnabled(.info, .wgpu)) .info
+        else if (std.log.logEnabled(.warn, .wgpu)) .warn
+        else .err
 };
 
-pub fn init(comptime layout: Layout) !Self {
+pub fn init(mem: std.mem.Allocator, comptime layout: Layout) !Self {
+    wgpu.wgpuSetLogCallback(logCallback, null);
+    wgpu.wgpuSetLogLevel(switch (layout.log_level) {
+        .debug => wgpu.WGPULogLevel_Debug,
+        .info => wgpu.WGPULogLevel_Info,
+        .warn => wgpu.WGPULogLevel_Warn,
+        else => wgpu.WGPULogLevel_Error
+    });
+
     const instance: util.Known(wgpu.WGPUInstance) = wgpu.wgpuCreateInstance(null) orelse return error.CreateInstanceFailed;
     errdefer wgpu.wgpuInstanceRelease(instance);
 
@@ -83,15 +104,18 @@ pub fn init(comptime layout: Layout) !Self {
     errdefer wgpu.wgpuDeviceRelease(device);
 
     const queue = wgpu.wgpuDeviceGetQueue(device) orelse return error.CreateQueueFailed;
+    errdefer wgpu.wgpuQueueRelease(queue);
 
-    wgpu.wgpuSetLogCallback(logCallback, null);
-    wgpu.wgpuSetLogLevel(2);
+    const encoder = wgpu.wgpuDeviceCreateCommandEncoder(device, &.{}) orelse return error.CreateEncoderFailed;
 
     return .{
+        .mem = mem,
         .instance = instance,
         .adapter = adapter,
         .device = device,
-        .queue = queue
+        .queue = queue,
+        .encoder = encoder,
+        .buffer_mappings = .empty
     };
 }
 
@@ -138,39 +162,52 @@ fn deviceCallback(
 }
 
 fn deviceLost(
-    device: [*c]const wgpu.WGPUDevice, reason: wgpu.WGPUDeviceLostReason, message: wgpu.WGPUStringView,
-    userdata1: ?*anyopaque, userdata2: ?*anyopaque
+    _: [*c]const wgpu.WGPUDevice, _: wgpu.WGPUDeviceLostReason, message: wgpu.WGPUStringView,
+    _: ?*anyopaque, _: ?*anyopaque
 ) callconv(.C) void {
-    _ = device; _ = userdata1; _ = userdata2;
-
-    const r = switch (reason) {
-        wgpu.WGPUDeviceLostReason_Destroyed => "Destroyed",
-        wgpu.WGPUDeviceLostReason_InstanceDropped => "Instance Dropped",
-        wgpu.WGPUDeviceLostReason_FailedCreation => "Failed Creation",
-        else => "Unknown"
-    };
-
-    std.debug.panic("Device Lost: {s}, Message: {s}\n", .{ r, util.fromStringView(message) orelse "" });
+    if (util.fromStringView(message)) |m| wgpuLog.err("{s}", .{ m });
+    @panic("WGPU Error");
 }
 
 fn deviceUncapturedError(
-    device: [*c]const wgpu.WGPUDevice, error_type: wgpu.WGPUErrorType, message: wgpu.WGPUStringView,
-    userdata1: ?*anyopaque, userdata2: ?*anyopaque
+    _: [*c]const wgpu.WGPUDevice, error_type: wgpu.WGPUErrorType, message: wgpu.WGPUStringView,
+    _: ?*anyopaque, _: ?*anyopaque
 ) callconv(.C) void {
-    _ = device; _ = userdata1; _ = userdata2;
-
-    const e = switch (error_type) {
-        wgpu.WGPUErrorType_NoError => "No Error",
-        wgpu.WGPUErrorType_Validation => "Validation",
-        wgpu.WGPUErrorType_OutOfMemory => "Out of Memory",
-        wgpu.WGPUErrorType_Internal => "Internal",
-        else => "Unknown"
-    };
-
-    std.debug.panic("Device Uncaptured Error: {s}, Message: {s}\n", .{ e, util.fromStringView(message) orelse "" });
+    if (util.fromStringView(message)) |m| wgpuLog.err("{s}", .{ m });
+    switch (error_type) {
+        wgpu.WGPUErrorType_NoError => {},
+        else => @panic("WGPU Error")
+    }
 }
 
 fn logCallback(level: wgpu.WGPULogLevel, message: wgpu.WGPUStringView, _: ?*anyopaque) callconv(.C) void {
-    _ = level;
-    std.debug.print("{s}\n", .{ util.fromStringView(message) orelse "" });
+    switch (level) {
+        wgpu.WGPULogLevel_Error => {
+            if (util.fromStringView(message)) |m| wgpuLog.err("{s}", .{ m });
+            @panic("WGPU Error");
+        },
+        wgpu.WGPULogLevel_Warn  => if (util.fromStringView(message)) |m| wgpuLog.warn("{s}", .{ m }),
+        wgpu.WGPULogLevel_Info  => if (util.fromStringView(message)) |m| wgpuLog.info("{s}", .{ m }),
+        wgpu.WGPULogLevel_Debug => if (util.fromStringView(message)) |m| wgpuLog.debug("{s}", .{ m }),
+        else => {}
+    }
+}
+
+pub fn submit(self: *Self) !void {
+    for (self.buffer_mappings.items) |buf| {
+        buf.mapping = null;
+        wgpu.wgpuBufferUnmap(buf.buffer);
+    }
+
+    const commands = wgpu.wgpuCommandEncoderFinish(self.encoder, &.{}) orelse return error.CommandEncodingError;
+    defer wgpu.wgpuCommandBufferRelease(commands);
+    wgpu.wgpuQueueSubmit(self.queue, 1, &[1]wgpu.WGPUCommandBuffer{commands});
+    wgpu.wgpuCommandEncoderRelease(self.encoder);
+
+    for (self.buffer_mappings.items) |buf| {
+        buf.copy_queued = false;
+        if (buf.wants_mapping) buf.map();
+    }
+
+    self.encoder = wgpu.wgpuDeviceCreateCommandEncoder(self.device, &.{}) orelse return error.CreateEncoderFailed;
 }

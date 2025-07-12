@@ -2,7 +2,10 @@ const std = @import("std");
 const wgpu = @import("wgpu");
 
 pub fn Known(comptime T: type) type {
-    return @typeInfo(T).optional.child;
+    return switch (@typeInfo(T)) {
+        .optional => |o| o.child,
+        else => T
+    };
 }
 
 pub fn toStringView(str: []const u8) wgpu.WGPUStringView {

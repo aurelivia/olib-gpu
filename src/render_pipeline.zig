@@ -80,11 +80,9 @@ pub const ColorMask = enum (wgpu.WGPUColorWriteMask) {
 };
 
 inner: util.Known(wgpu.WGPURenderPipeline),
-shader: util.Known(wgpu.WGPUShaderModule),
 
 pub fn deinit(self: *Self) void {
     wgpu.wgpuRenderPipelineRelease(self.inner);
-    wgpu.wgpuShaderModuleRelease(self.shader);
 }
 
 pub const Target = struct {
@@ -94,9 +92,9 @@ pub const Target = struct {
 };
 
 pub const Layout = struct {
-    source: []const u8,
     bind_groups: []const BindGroup.Layout = &[0]BindGroup.Layout{},
     vertex: ?struct {
+        source: ?[]const u8 = null,
         entry: []const u8 = "vert",
         vertex_type: ?type = null,
         instanced: bool = false,
@@ -106,19 +104,31 @@ pub const Layout = struct {
     } = null,
     depth: bool = true,
     fragment: struct {
+        source: []const u8,
         entry: []const u8 = "frag",
         targets: []const Target
     }
 };
 
 pub fn init(interface: *Interface, comptime layout: Layout) !Self {
-    const shader = wgpu.wgpuDeviceCreateShaderModule(interface.device, &.{
+    const frag_shader = wgpu.wgpuDeviceCreateShaderModule(interface.device, &.{
         .nextInChain = @ptrCast(&wgpu.WGPUShaderSourceWGSL{
             .chain = .{ .sType = wgpu.WGPUSType_ShaderSourceWGSL },
-            .code = util.toStringView(layout.source)
+            .code = util.toStringView(layout.fragment.source)
         })
     }) orelse return error.CreateShaderFailed;
-    errdefer wgpu.wgpuShaderModuleRelease(shader);
+    defer wgpu.wgpuShaderModuleRelease(frag_shader);
+
+    const vert_shader = if (layout.vertex) |vert_layout| if (vert_layout.source) |src| b: {
+        const vs = wgpu.wgpuDeviceCreateShaderModule(interface.device, &.{
+            .nextInChain = @ptrCast(&wgpu.WGPUShaderSourceWGSL{
+                .chain = .{ .sType = wgpu.WGPUSType_ShaderSourceWGSL },
+                .code = util.toStringView(src)
+            })
+        }) orelse return error.CreateShaderFailed;
+        defer wgpu.wgpuShaderModuleRelease(vs);
+        break :b vs;
+    } else null;
 
     var bg_layouts: [layout.bind_groups.len]wgpu.WGPUBindGroupLayout = undefined;
     inline for (layout.bind_groups, 0..) |bg, i| bg_layouts[i] = try BindGroup.instantiateLayout(interface, bg);
@@ -157,7 +167,7 @@ pub fn init(interface: *Interface, comptime layout: Layout) !Self {
     const inner = wgpu.wgpuDeviceCreateRenderPipeline(interface.device, &.{
         .layout = pipeline_layout,
         .vertex = if (layout.vertex) |vert_layout| .{
-            .module = shader,
+            .module = vert_shader orelse frag_shader,
             .entryPoint = util.toStringView(vert_layout.entry),
             .bufferCount = if (buffers) |b| b.len else 0,
             .buffers = if (buffers) |b| b.ptr else null
@@ -168,7 +178,7 @@ pub fn init(interface: *Interface, comptime layout: Layout) !Self {
             .cullMode = @intFromEnum(vert_layout.cull_mode)
         } else null,
         .fragment = &.{
-            .module = shader,
+            .module = frag_shader,
             .entryPoint = util.toStringView(layout.fragment.entry),
             .targetCount = layout.fragment.targets.len,
             .targets = &targets
@@ -202,10 +212,7 @@ pub fn init(interface: *Interface, comptime layout: Layout) !Self {
         }
     }) orelse return error.CreatePipelineFailed;
 
-    return .{
-        .inner = inner,
-        .shader = shader
-    };
+    return .{ .inner = inner };
 }
 
 inline fn layoutFor(

@@ -1,14 +1,13 @@
 pub const BindGroup = @import("./bind_group.zig");
-const buffer = @import("./buffer.zig");
 pub const Buffer = struct {
-    pub fn Vertex(comptime T: type) type { return buffer.Buffer(.vertex, T); }
-    pub const Index = buffer.IndexBuffer;
-    pub const Instance = buffer.InstanceBuffer;
-    pub fn Uniform(comptime T: type) type { return buffer.Buffer(.uniform, T); }
-    pub fn Storage(comptime T: type) type { return buffer.Buffer(.storage, T); }
-    pub fn Staging(comptime T: type) type { return buffer.Buffer(.staging, T); }
-    pub fn Input(comptime T: type) type { return buffer.Buffer(.input, T); }
-    pub fn Output(comptime T: type) type { return buffer.Buffer(.output, T); }
+    pub const Slice = @import("./buffer/slice.zig");
+    pub const Fixed = @import("./buffer/fixed.zig").Fixed;
+    pub const Mapped = @import("./buffer/mapped.zig").Mapped;
+    pub const Staged = @import("./buffer/staged.zig").Staged;
+    pub fn Vertex(comptime T: type) type { return Fixed(.vertex, T); }
+    pub const Index = Fixed(.index, u32);
+    pub const Instance = Staged(.instance, [4]@Vector(4, f32));
+    pub fn Uniform(comptime T: type) type { return Staged(.uniform, T); }
 };
 pub const BufferType = @import("./buffer.zig").Type;
 pub const Canvas = @import("./canvas.zig");
