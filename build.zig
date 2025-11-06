@@ -15,11 +15,12 @@ pub fn build(b: *std.Build) void {
     root.link_libcpp = true;
 
     const run_tests = b.step("test", "Run tests");
-    const tests = b.addTest(.{ .root_source_file = b.path("test/root.zig"), .target = target, .optimize = optimize });
-    tests.root_module.addImport("olib-gpu", root);
+    const tests = b.createModule(.{ .root_source_file = b.path("test/root.zig"), .target = target, .optimize = optimize });
+    tests.addImport("olib-gpu", root);
     const zigimg = b.dependency("zigimg", .{ .target = target, .optimize = optimize });
-    tests.root_module.addImport("zigimg", zigimg.module("zigimg"));
-    run_tests.dependOn(&b.addRunArtifact(tests).step);
+    tests.addImport("zigimg", zigimg.module("zigimg"));
+    const test_step = b.addTest(.{ .root_module = tests });
+    run_tests.dependOn(&b.addRunArtifact(test_step).step);
 
     const os = @tagName(target.result.os.tag);
     const arch = @tagName(target.result.cpu.arch);
@@ -36,7 +37,7 @@ pub fn build(b: *std.Build) void {
         else => ""
     };
 
-    const wgpu_target = std.fmt.allocPrintZ(b.allocator, "wgpu_{s}_{s}{s}_{s}", .{ os, arch, abi, mode }) catch unreachable;
+    const wgpu_target = std.fmt.allocPrint(b.allocator, "wgpu_{s}_{s}{s}_{s}", .{ os, arch, abi, mode }) catch unreachable;
 
     for (b.available_deps) |dep| {
         if (std.mem.eql(u8, dep[0], wgpu_target)) break;

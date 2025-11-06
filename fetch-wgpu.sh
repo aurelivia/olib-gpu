@@ -2,7 +2,7 @@
 OS=('linux' 'windows' 'macos')
 ARCH=('aarch64' 'x86_64')
 MODE=('debug' 'release')
-VERSION='v25.0.2.1'
+VERSION='v27.0.2.0'
 
 for os in ${OS[@]}; do
   for arch in ${ARCH[@]}; do
@@ -22,10 +22,9 @@ for os in ${OS[@]}; do
       abi_out="${ABI_OUT[$abi]}"
       for mode in ${MODE[@]}; do
         dest="https://github.com/gfx-rs/wgpu-native/releases/download/${VERSION}/wgpu-${os}-${arch}${abi_in}-${mode}.zip"
-        hash="$(zig fetch --debug-hash "$dest" | tail -1)"
         echo "        .wgpu_${os}_${arch}${abi_out}_${mode} = .{"
         echo "            .url = \"$dest\","
-        echo "            .hash = \"$hash\","
+        echo "            .hash = \"$(zig fetch --debug-hash "$dest" | tail -1)\","
         echo "            .lazy = true"
         echo "        },"
       done
