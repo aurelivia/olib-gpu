@@ -1,12 +1,13 @@
+const BindGroup = @This();
+
 const std = @import("std");
 const wgpu = @import("wgpu");
 const util = @import("./util.zig");
 const enums = @import("./enums.zig");
+const log = std.log.scoped(.@"olib-gpu");
 const Interface = @import("./interface.zig");
 const Slice = @import("./buffer/slice.zig");
 const Texture = @import("./texture.zig");
-
-pub const Self = @This();
 
 pub const Stage = enum (wgpu.WGPUShaderStage) {
     vertex = wgpu.WGPUShaderStage_Vertex,
@@ -17,139 +18,158 @@ pub const Stage = enum (wgpu.WGPUShaderStage) {
 };
 
 pub const EntryType = enum { uniform, storage, texture, sampler };
-
-pub const Layout = []const Entry;
 pub const Entry = union (EntryType) {
     uniform: struct {
-        elem_type: type,
-        visibility: Stage
+        stage: Stage,
+        type: type,
     },
     storage: struct {
-        elem_type: type,
-        visibility: Stage,
+        stage: Stage,
+        type: type,
         writable: bool = false
     },
     texture: struct {
-        visibility: Stage
+        stage: Stage
     },
     sampler: struct {
-        visibility: Stage
+        stage: Stage
     }
 };
 
-inner: util.Known(wgpu.WGPUBindGroup),
+pub fn Layout(comptime layout: anytype) type { return struct {
+    const _Layout = @This();
+    comptime { if (@typeInfo(@TypeOf(layout)) != .@"struct") @compileError("BindGroup layout must be a tuple."); }
+    const meta = @typeInfo(@TypeOf(layout)).@"struct";
+    comptime { if (!meta.is_tuple) @compileError("BindGroup layout must be a tuple."); }
 
-pub fn deinit(self: *Self) void {
-    wgpu.wgpuBindGroupRelease(self.inner);
-}
+    inner: util.Known(wgpu.WGPUBindGroupLayout),
 
-inline fn entryLayout(comptime layout: Layout) type {
-    var fields: [layout.len]std.builtin.Type.StructField = undefined;
-    for (layout, 0..) |entry, i| {
-        const T = switch (entry) {
-            .uniform, .storage => Slice,
-            .texture, .sampler => Texture
-        };
-
-        fields[i] = .{
-            .name = std.fmt.comptimePrint("{}", .{ i }),
-            .@"type" = T,
-            .default_value_ptr = null,
-            .is_comptime = false,
-            .alignment = @alignOf(T)
-        };
+    pub fn deinit(self: *_Layout) void {
+        wgpu.wgpuBindGroupLayoutRelease(self.inner);
+        self.* = undefined;
     }
 
-    return @Type(.{ .@"struct" = .{
-        .layout = .auto,
-        .fields = &fields,
-        .decls = &.{},
-        .is_tuple = true
-    }});
-}
+    pub fn init(interface: *Interface) !_Layout {
+        const entries: [meta.fields.len]wgpu.WGPUBindGroupLayoutEntry = comptime b: {
+            var entries: [meta.fields.len]wgpu.WGPUBindGroupLayoutEntry = undefined;
+            for (0..meta.fields.len) |i| {
+                const entry = layout[i];
+                if (@TypeOf(entry) != Entry) @compileError("All entries in layout tuple must be of Entry type.");
+                entries[i] = .{
+                    .binding = i,
+                    .visibility = @intFromEnum(util.anyUnionField(entry, "stage")),
+                    .buffer = switch (entry) {
+                        .uniform => |_| .{
+                            .@"type" = wgpu.WGPUBufferBindingType_Uniform,
+                            .hasDynamicOffset = @intFromBool(false),
+                            .minBindingSize = 0
+                        },
+                        .storage => |e| .{
+                            .@"type" = if (e.writable) wgpu.WGPUBufferBindingType_Storage
+                                       else wgpu.WGPUBufferBindingType_ReadOnlyStorage,
+                            .hasDynamicOffset = @intFromBool(false),
+                            .minBindingSize = 0
+                        },
+                        else => .{ .@"type" = wgpu.WGPUBufferBindingType_BindingNotUsed }
+                    },
+                    .texture = switch (entry) {
+                        .texture => |_| .{
+                            .sampleType = wgpu.WGPUTextureSampleType_Float,
+                            .viewDimension = wgpu.WGPUTextureViewDimension_2D,
+                            .multisampled = @intFromBool(false)
+                        },
+                        else => .{ .sampleType = wgpu.WGPUTextureSampleType_BindingNotUsed }
+                    },
+                    .sampler = switch (entry) {
+                        .sampler => |_| .{
+                            .@"type" = wgpu.WGPUSamplerBindingType_Filtering
+                        },
+                        else => .{ .@"type" = wgpu.WGPUSamplerBindingType_BindingNotUsed }
+                    },
+                    .storageTexture = switch (entry) {
+                        else => .{ .access = wgpu.WGPUStorageTextureAccess_BindingNotUsed }
+                    }
+                };
+            }
 
-pub fn init(interface: *Interface, comptime layout: Layout, entries: entryLayout(layout)) !Self {
-    std.debug.assert(layout.len == entries.len);
-    const bg_layout = try instantiateLayout(interface, layout);
-    defer wgpu.wgpuBindGroupLayoutRelease(bg_layout);
+            break :b entries;
+        };
 
-    var inner_entries: [layout.len]wgpu.WGPUBindGroupEntry = undefined;
-    inline for (layout, 0..) |entry, i| inner_entries[i] = entryFor(i, entry, entries[i]);
-    const inner = wgpu.wgpuDeviceCreateBindGroup(interface.device, &.{
-        .layout = bg_layout,
-        .entryCount = entries.len,
-        .entries = &inner_entries
-    }) orelse return error.CreateBindGroupFailed;
+        const inner = wgpu.wgpuDeviceCreateBindGroupLayout(interface.device, &.{
+            .entryCount = entries.len,
+            .entries = &entries
+        }) orelse return error.CreateBindGroupFailed;
 
-    return .{
-        .inner = inner
-    };
-}
+        return .{ .inner = inner };
+    }
 
-pub fn instantiateLayout(interface: *Interface, comptime layout: Layout) !util.Known(wgpu.WGPUBindGroupLayout) {
-    var entries: [layout.len]wgpu.WGPUBindGroupLayoutEntry = undefined;
-    inline for (layout, 0..) |entry, i| entries[i] = layoutEntryFor(i, entry);
-    return wgpu.wgpuDeviceCreateBindGroupLayout(interface.device, &.{
-        .entryCount = layout.len,
-        .entries = &entries
-    }) orelse error.CreateBindGroupLayoutFailed;
-}
+    pub const Values = b: {
+        var fields: [meta.fields.len]std.builtin.Type.StructField = undefined;
+        for (0..meta.fields.len) |i| {
+            const T = switch (layout[i]) {
+                .uniform, .storage => Slice,
+                .texture, .sampler => Texture
+            };
 
-inline fn layoutEntryFor(comptime binding: u32, comptime entry: Entry) wgpu.WGPUBindGroupLayoutEntry {
-    return .{
-        .binding = binding,
-        .visibility = @intFromEnum(util.anyUnionField(entry, "visibility")),
-        .buffer = switch (entry) {
-            .uniform => |_| .{
-                .@"type" = wgpu.WGPUBufferBindingType_Uniform,
-                .hasDynamicOffset = @intFromBool(false),
-                .minBindingSize = 0
-            },
-            .storage => |e| .{
-                .@"type" = if (e.writable) wgpu.WGPUBufferBindingType_Storage
-                           else wgpu.WGPUBufferBindingType_ReadOnlyStorage,
-                .hasDynamicOffset = @intFromBool(false),
-                .minBindingSize = 0
-            },
-            else => .{ .@"type" = wgpu.WGPUBufferBindingType_BindingNotUsed }
-        },
-        .texture = switch (entry) {
-            .texture => |_| .{
-                .sampleType = wgpu.WGPUTextureSampleType_Float,
-                .viewDimension = wgpu.WGPUTextureViewDimension_2D,
-                .multisampled = @intFromBool(false)
-            },
-            else => .{ .sampleType = wgpu.WGPUTextureSampleType_BindingNotUsed }
-        },
-        .sampler = switch (entry) {
-            .sampler => |_| .{
-                .@"type" = wgpu.WGPUSamplerBindingType_Filtering
-            },
-            else => .{ .@"type" = wgpu.WGPUSamplerBindingType_BindingNotUsed }
-        },
-        .storageTexture = switch (entry) {
-            else => .{ .access = wgpu.WGPUStorageTextureAccess_BindingNotUsed }
+            fields[i] = .{
+                .name = std.fmt.comptimePrint("{}", .{ i }),
+                .@"type" = T,
+                .default_value_ptr = null,
+                .is_comptime = false,
+                .alignment = @alignOf(T)
+            };
         }
+
+        break :b @Type(.{ .@"struct" = .{
+            .layout = .auto,
+            .fields = &fields,
+            .decls = &.{},
+            .is_tuple = true
+        }});
     };
+
+    fn instance(self: *const _Layout, interface: *Interface, values: Values) !BindGroup {
+        var entries: [meta.fields.len]wgpu.WGPUBindGroupEntry = undefined;
+        inline for (0..meta.fields.len) |i| {
+            entries[i] = .{
+                .binding = @intCast(i),
+                .offset = 0,
+                .size = wgpu.WGPU_WHOLE_SIZE,
+                .buffer = switch (layout[i]) {
+                    .uniform, .storage => values[i].source,
+                    else => null
+                },
+                .sampler = switch (layout[i]) {
+                    .sampler => values[i].sampler,
+                    else => null
+                },
+                .textureView = switch (layout[i]) {
+                    .texture => values[i].view,
+                    else => null
+                }
+            };
+        }
+
+        const inner = wgpu.wgpuDeviceCreateBindGroup(interface.device, &.{
+            .layout = self.inner,
+            .entryCount = entries.len,
+            .entries = &entries
+        }) orelse return error.CreateBindGroupInstanceFailed;
+
+        return .{ .inner = inner };
+    }
+};}
+
+inner: util.Known(wgpu.WGPUBindGroup),
+
+pub fn deinit(self: *BindGroup) void {
+    wgpu.wgpuBindGroupRelease(self.inner);
+    self.* = undefined;
 }
 
-inline fn entryFor(comptime binding: u32, comptime entry: Entry, value: anytype) wgpu.WGPUBindGroupEntry {
-    return .{
-        .binding = binding,
-        .offset = 0,
-        .size = wgpu.WGPU_WHOLE_SIZE,
-        .buffer = switch (entry) {
-            .uniform => value.source,
-            .storage => value.source,
-            else => null
-        },
-        .sampler = switch (entry) {
-            .sampler => value.sampler,
-            else => null
-        },
-        .textureView = switch (entry) {
-            .texture => value.view,
-            else => null
-        }
-    };
+pub fn init(interface: *Interface, comptime layout: anytype, values: Layout(layout).Values) !BindGroup {
+    var bind_group: Layout(layout) = try .init(interface);
+    defer bind_group.deinit();
+
+    return try bind_group.instance(interface, values);
 }

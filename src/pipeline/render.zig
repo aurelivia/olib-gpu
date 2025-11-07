@@ -1,11 +1,11 @@
+const RenderPipeline = @This();
+
 const std = @import("std");
 const wgpu = @import("wgpu");
-const util = @import("./util.zig");
-const enums = @import("./enums.zig");
-const Interface = @import("./interface.zig");
-const BindGroup = @import("./bind_group.zig");
-
-const Self = @This();
+const util = @import("../util.zig");
+const enums = @import("../enums.zig");
+const Interface = @import("../interface.zig");
+const BindGroup = @import("../bind_group.zig");
 
 pub const BlendComponent = struct {
     op: enums.BlendOperation,
@@ -81,7 +81,7 @@ pub const ColorMask = enum (wgpu.WGPUColorWriteMask) {
 
 inner: util.Known(wgpu.WGPURenderPipeline),
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *RenderPipeline) void {
     wgpu.wgpuRenderPipelineRelease(self.inner);
 }
 
@@ -92,7 +92,6 @@ pub const Target = struct {
 };
 
 pub const Layout = struct {
-    bind_groups: []const BindGroup.Layout = &[0]BindGroup.Layout{},
     vertex: ?struct {
         source: ?[]const u8 = null,
         entry: []const u8 = "vert",
@@ -110,7 +109,7 @@ pub const Layout = struct {
     }
 };
 
-pub fn init(interface: *Interface, comptime layout: Layout) !Self {
+pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups: anytype) !RenderPipeline {
     const frag_shader = wgpu.wgpuDeviceCreateShaderModule(interface.device, &.{
         .nextInChain = @ptrCast(&wgpu.WGPUShaderSourceWGSL{
             .chain = .{ .sType = wgpu.WGPUSType_ShaderSourceWGSL },
@@ -130,25 +129,31 @@ pub fn init(interface: *Interface, comptime layout: Layout) !Self {
         break :b vs;
     } else null;
 
-    var bg_layouts: [layout.bind_groups.len]wgpu.WGPUBindGroupLayout = undefined;
-    inline for (layout.bind_groups, 0..) |bg, i| bg_layouts[i] = try BindGroup.instantiateLayout(interface, bg);
+    if (@typeInfo(@TypeOf(bind_groups)) != .@"struct") @compileError("bind groups must be a tuple.");
+    const meta = @typeInfo(@TypeOf(bind_groups)).@"struct";
+    if (!meta.is_tuple) @compileError("bind groups must be a tuple.");
+    var bg_layouts: [meta.fields.len]wgpu.WGPUBindGroupLayout = undefined;
+    inline for (0..meta.fields.len) |i| bg_layouts[i] = (try BindGroup.Layout(bind_groups[i]).init(interface)).inner;
     defer inline for (bg_layouts) |bg| wgpu.wgpuBindGroupLayoutRelease(bg);
 
     const pipeline_layout = wgpu.wgpuDeviceCreatePipelineLayout(interface.device, &.{
-        .bindGroupLayoutCount = layout.bind_groups.len,
+        .bindGroupLayoutCount = bg_layouts.len,
         .bindGroupLayouts = &bg_layouts
     }) orelse return error.CreatePipelineLayoutFailed;
     defer wgpu.wgpuPipelineLayoutRelease(pipeline_layout);
 
-    var targets: [layout.fragment.targets.len]wgpu.WGPUColorTargetState = undefined;
-    inline for (layout.fragment.targets, 0..) |target, i| targets[i] = .{
-        .format = @intFromEnum(target.format),
-        .blend = if (target.blend) |b| &getBlendState(b) else null,
-        .writeMask = @intFromEnum(target.mask)
+    const targets: [layout.fragment.targets.len]wgpu.WGPUColorTargetState = comptime b: {
+        var targets: [layout.fragment.targets.len]wgpu.WGPUColorTargetState = undefined;
+        for (layout.fragment.targets, 0..) |target, i| targets[i] = .{
+            .format = @intFromEnum(target.format),
+            .blend = if (target.blend) |b| &getBlendState(b) else null,
+            .writeMask = @intFromEnum(target.mask)
+        };
+        break :b targets;
     };
 
-    var loc: u32 = 0;
-    const buffers: ?[]wgpu.WGPUVertexBufferLayout = b: {
+    const buffers: ?[]wgpu.WGPUVertexBufferLayout = comptime b: {
+        var loc: u32 = 0;
         if (layout.vertex) |vert_layout| {
             if (vert_layout.vertex_type) |vertex_type| {
                 if (vert_layout.instanced) {
@@ -216,7 +221,7 @@ pub fn init(interface: *Interface, comptime layout: Layout) !Self {
 }
 
 inline fn layoutFor(
-    start: u32, comptime T: type,
+    comptime start: u32, comptime T: type,
     comptime step_mode: wgpu.WGPUVertexStepMode
 ) struct { u32, wgpu.WGPUVertexBufferLayout } {
     var loc: u32 = start;
@@ -232,15 +237,19 @@ inline fn layoutFor(
             }}
         },
         .array => |a| b: {
-            var attrs: [a.len]wgpu.WGPUVertexAttribute = undefined;
-            inline for (0..a.len) |i| {
-                attrs[i] = .{
-                    .shaderLocation = loc,
-                    .offset = @sizeOf(a.child) * i,
-                    .format = formatFor(a.child)
-                };
-                loc += 1;
-            }
+            const attrs: [a.len]wgpu.WGPUVertexAttribute = comptime bi: {
+                var attrs: [a.len]wgpu.WGPUVertexAttribute = undefined;
+                for (0..a.len) |i| {
+                    attrs[i] = .{
+                        .shaderLocation = loc,
+                        .offset = @sizeOf(a.child) * i,
+                        .format = formatFor(a.child)
+                    };
+                    loc += 1;
+                }
+
+                break :bi attrs;
+            };
 
             break :b .{
                 .stepMode = step_mode,
@@ -251,15 +260,19 @@ inline fn layoutFor(
         },
         .@"struct" => |s| b: {
             if (s.layout == .auto) @compileError("Vertex struct must have non-auto layout.");
-            var attrs: [s.fields.len]wgpu.WGPUVertexAttribute = undefined;
-            inline for (s.fields, 0..) |field, i| {
-                attrs[i] = .{
-                    .shaderLocation = loc,
-                    .offset = @offsetOf(T, field.name),
-                    .format = formatFor(field.type)
-                };
-                loc += 1;
-            }
+            const attrs: [s.fields.len]wgpu.WGPUVertexAttribute = comptime bi: {
+                var attrs: [s.fields.len]wgpu.WGPUVertexAttribute = undefined;
+                for (s.fields, 0..) |field, i| {
+                    attrs[i] = .{
+                        .shaderLocation = loc,
+                        .offset = @offsetOf(T, field.name),
+                        .format = formatFor(field.type)
+                    };
+                    loc += 1;
+                }
+
+                break :bi attrs;
+            };
 
             break :b .{
                 .stepMode = step_mode,

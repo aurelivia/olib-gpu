@@ -23,12 +23,12 @@ pub const Usage = enum (wgpu.WGPUTextureUsage) {
     pub fn isNot(a: Usage, b: Usage) bool { return !a.is(b); }
 };
 
-pub const TextureBinding: [2]BindGroup.Entry = .{
+pub const BindGroupLayout = .{
     .{ .texture = .{
-        .visibility = .fragment
+        .stage = .fragment
     }},
     .{ .sampler = .{
-        .visibility = .fragment
+        .stage = .fragment
     }}
 };
 
@@ -126,7 +126,7 @@ pub fn init(interface: *Interface, width: u32, height: u32, comptime layout: Lay
 
     var bind_group: ?BindGroup = null;
     if (layout.bound) {
-        bind_group = try .init(interface, &TextureBinding, .{
+        bind_group = try .init(interface, BindGroupLayout, .{
             texture,
             texture
         });

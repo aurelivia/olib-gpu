@@ -6,7 +6,7 @@ const log = std.log.scoped(.@"olib-gpu");
 
 const Interface = @import("./interface.zig");
 const Surface = @import("./surface.zig");
-const RenderPipeline = @import("./render_pipeline.zig");
+const RenderPipeline = @import("./pipeline/render.zig");
 const BufferSlice = @import("./buffer/slice.zig");
 const Texture = @import("./texture.zig");
 const BindGroup = @import("./bind_group.zig");
