@@ -9,11 +9,10 @@ pub const Buffer = struct {
     pub const Instance = Staged(.instance, [4]@Vector(4, f32));
     pub fn Uniform(comptime T: type) type { return Staged(.uniform, T); }
 };
-pub const BufferType = @import("./buffer.zig").Type;
 pub const Canvas = @import("./canvas.zig");
 pub const Interface = @import("./interface.zig");
 pub const Pipeline = struct {
-    pub const Render = @import("./render_pipeline.zig");
+    pub const Render = @import("./pipeline/render.zig");
 };
 pub const Surface = @import("./surface.zig");
 pub const Texture = @import("./texture.zig");
