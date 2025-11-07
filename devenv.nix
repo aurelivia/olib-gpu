@@ -2,6 +2,8 @@
   pkgs-unstable = import inputs.unstable { system = pkgs.stdenv.system; };
 in {
   languages.zig.enable = true;
+  languages.zig.package = pkgs-unstable.zig;
+  languages.zig.zls.package = pkgs-unstable.zls;
 
   packages = with pkgs; [
     xorg.libX11

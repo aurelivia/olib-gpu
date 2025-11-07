@@ -2,7 +2,7 @@
     .name = .olib_gpu,
     .version = "0.0.0",
     .fingerprint = 0x3d500f44e7e2be50, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.15.0",
     .dependencies = .{
         .wgpu_linux_aarch64_debug = .{
             .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v27.0.2.0/wgpu-linux-aarch64-debug.zip",
