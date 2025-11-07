@@ -17,6 +17,7 @@ config: wgpu.WGPUSurfaceConfiguration,
 
 pub fn deinit(self: *Self) void {
     wgpu.wgpuSurfaceRelease(self.inner);
+    self.* = undefined;
 }
 
 pub const Source = union (enum) {

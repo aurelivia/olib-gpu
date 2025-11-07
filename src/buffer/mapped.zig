@@ -68,6 +68,7 @@ pub fn Mapped(comptime Dir: MapDir, comptime T: type) type { return struct {
         wgpu.wgpuBufferUnmap(self.inner.buffer);
         wgpu.wgpuBufferRelease(self.inner.buffer);
         self.interface.mem.destroy(self.inner);
+        self.* = undefined;
     }
 
     pub fn init(interface: *Interface, len: u32) !Self {

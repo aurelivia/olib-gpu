@@ -25,6 +25,7 @@ pub fn Staged(comptime Usage: StagedUsage, comptime T: type) type { return struc
     pub fn deinit(self: *Self) void {
         self.staging.deinit();
         wgpu.wgpuBufferRelease(self.staged);
+        self.* = undefined;
     }
 
     pub fn init(interface: *Interface, len: u32) !Self {

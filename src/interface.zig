@@ -22,6 +22,7 @@ pub fn deinit(self: *Self) void {
     wgpu.wgpuDeviceRelease(self.device);
     wgpu.wgpuAdapterRelease(self.adapter);
     wgpu.wgpuInstanceRelease(self.instance);
+    self.* = undefined;
 }
 
 pub const Backend = enum (wgpu.WGPUBackendType) {
@@ -45,7 +46,6 @@ pub const Layout = struct {
 };
 
 pub fn init(mem: std.mem.Allocator, comptime layout: Layout) !Self {
-    wgpu.wgpuSetLogCallback(logCallback, null);
     wgpu.wgpuSetLogLevel(switch (layout.log_level) {
         .debug => wgpu.WGPULogLevel_Debug,
         .info => wgpu.WGPULogLevel_Info,
@@ -75,7 +75,10 @@ pub fn init(mem: std.mem.Allocator, comptime layout: Layout) !Self {
 
     const adapter: util.Known(wgpu.WGPUAdapter) = switch (adapter_response.status) {
         wgpu.WGPURequestAdapterStatus_Success => adapter_response.adapter.?,
-        else => return error.CreateAdapterFailed
+        else => {
+            log.err("No graphics adapter was found, likely no backend libraries are available.", .{});
+            return error.CreateAdapterFailed;
+        }
     };
     errdefer wgpu.wgpuAdapterRelease(adapter);
 

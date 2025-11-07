@@ -45,6 +45,7 @@ pub fn deinit(self: *Self) void {
     if (self.sampler) |samp| wgpu.wgpuSamplerRelease(samp);
     if (self.view) |view| wgpu.wgpuTextureViewRelease(view);
     wgpu.wgpuTextureRelease(self.inner);
+    self.* = undefined;
 }
 
 pub const Layout = struct {

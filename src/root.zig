@@ -13,6 +13,7 @@ pub const Canvas = @import("./canvas.zig");
 pub const Interface = @import("./interface.zig");
 pub const Pipeline = struct {
     pub const Render = @import("./pipeline/render.zig");
+    pub const Compute = @import("./pipeline/compute.zig");
 };
 pub const Surface = @import("./surface.zig");
 pub const Texture = @import("./texture.zig");

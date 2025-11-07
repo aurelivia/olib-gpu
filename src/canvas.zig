@@ -25,6 +25,7 @@ pub fn deinit(self: *Self) void {
     if (self.pass) |pass| wgpu.wgpuRenderPassEncoderRelease(pass);
     if (self.depth_view) |depth_view| wgpu.wgpuTextureViewRelease(depth_view);
     wgpu.wgpuTextureViewRelease(self.view);
+    self.* = undefined;
 }
 
 fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture), depth: ?wgpu.WGPUTexture) !Self {

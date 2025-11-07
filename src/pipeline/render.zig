@@ -83,6 +83,7 @@ inner: util.Known(wgpu.WGPURenderPipeline),
 
 pub fn deinit(self: *RenderPipeline) void {
     wgpu.wgpuRenderPipelineRelease(self.inner);
+    self.* = undefined;
 }
 
 pub const Target = struct {
@@ -125,13 +126,13 @@ pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups
                 .code = util.toStringView(src)
             })
         }) orelse return error.CreateShaderFailed;
-        defer wgpu.wgpuShaderModuleRelease(vs);
         break :b vs;
     } else null;
+    defer if (vert_shader) |vs| wgpu.wgpuShaderModuleRelease(vs);
 
-    if (@typeInfo(@TypeOf(bind_groups)) != .@"struct") @compileError("bind groups must be a tuple.");
+    if (@typeInfo(@TypeOf(bind_groups)) != .@"struct") @compileError("bind_groups must be a tuple.");
     const meta = @typeInfo(@TypeOf(bind_groups)).@"struct";
-    if (!meta.is_tuple) @compileError("bind groups must be a tuple.");
+    if (!meta.is_tuple) @compileError("bind_groups must be a tuple.");
     var bg_layouts: [meta.fields.len]wgpu.WGPUBindGroupLayout = undefined;
     inline for (0..meta.fields.len) |i| bg_layouts[i] = (try BindGroup.Layout(bind_groups[i]).init(interface)).inner;
     defer inline for (bg_layouts) |bg| wgpu.wgpuBindGroupLayoutRelease(bg);

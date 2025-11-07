@@ -22,6 +22,7 @@ pub fn Fixed(comptime Usage: FixedUsage, comptime T: type) type { return struct 
 
     pub fn deinit(self: *Self) void {
         wgpu.wgpuBufferRelease(self.inner);
+        self.* = undefined;
     }
 
     pub fn init(interface: *Interface, data: []const T) !Self {
