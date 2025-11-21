@@ -1,4 +1,5 @@
 const std = @import("std");
+const OOM = error { OutOfMemory };
 const wgpu = @import("wgpu");
 const util = @import("./util.zig");
 const enums = @import("./enums.zig");
@@ -29,7 +30,7 @@ pub const Source = union (enum) {
     xlib: struct { display: *anyopaque, window: u32 }
 };
 
-pub fn init(interface: *Interface, source: Source, width: u32, height: u32, useDepth: bool) !Self {
+pub fn init(interface: *Interface, source: Source, width: u32, height: u32, useDepth: bool) OOM!Self {
     log.info("Configuring surface for: {s}", .{ @tagName(source) });
     const desc: wgpu.WGPUSurfaceDescriptor = .{
         .nextInChain = switch (source) {
@@ -64,8 +65,7 @@ pub fn init(interface: *Interface, source: Source, width: u32, height: u32, useD
         }
     };
 
-    const inner = wgpu.wgpuInstanceCreateSurface(interface.instance, &desc) orelse return error.CreateSurfaceFailed;
-    errdefer wgpu.wgpuSurfaceRelease(inner);
+    const inner = wgpu.wgpuInstanceCreateSurface(interface.instance, &desc) orelse unreachable;
 
     var capabilities: wgpu.WGPUSurfaceCapabilities = undefined;
     switch (wgpu.wgpuSurfaceGetCapabilities(inner, interface.adapter, &capabilities)) {
@@ -104,10 +104,10 @@ pub fn init(interface: *Interface, source: Source, width: u32, height: u32, useD
         .height = height,
         .alphaMode = capabilities.alphaModes[0],
         .presentMode = present_mode,
-        // .nextInChain = @ptrCast(&wgpu.WGPUSurfaceConfigurationExtras{
-        //     .chain = .{ .sType = wgpu.WGPUSType_SurfaceConfigurationExtras },
-        //     .desiredMaximumFrameLatency = 2
-        // })
+        .nextInChain = @ptrCast(&wgpu.WGPUSurfaceConfigurationExtras{
+            .chain = .{ .sType = wgpu.WGPUSType_SurfaceConfigurationExtras },
+            .desiredMaximumFrameLatency = 2
+        })
     };
 
     wgpu.wgpuSurfaceConfigure(inner, &config);
@@ -125,7 +125,7 @@ pub fn init(interface: *Interface, source: Source, width: u32, height: u32, useD
     return surface;
 }
 
-pub fn resize(self: *Self, width: u32, height: u32) !void {
+pub fn resize(self: *Self, width: u32, height: u32) OOM!void {
     self.config.width = width;
     self.config.height = height;
     wgpu.wgpuSurfaceConfigure(self.inner, &self.config);
@@ -135,18 +135,18 @@ pub fn resize(self: *Self, width: u32, height: u32) !void {
     }
 }
 
-pub fn canvas(self: *Self) !Canvas {
+pub fn canvas(self: *Self) OOM!Canvas {
     return Canvas.fromSurface(self);
 }
 
-pub fn present(self: *Self) !void {
+pub fn present(self: *Self) void {
     switch (wgpu.wgpuSurfacePresent(self.inner)) {
         wgpu.WGPUStatus_Success => {},
-        else => return error.PresentationError
+        else => unreachable
     }
 }
 
-fn getDepthTexture(self: *Self) !Texture {
+fn getDepthTexture(self: *Self) OOM!Texture {
     return try .init(self.interface, self.config.width, self.config.height, .{
         .usage = Texture.Usage.render_attachment.with(.texture_binding),
         .format = .depth32_float,

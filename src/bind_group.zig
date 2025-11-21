@@ -1,6 +1,7 @@
 const BindGroup = @This();
 
 const std = @import("std");
+const OOM = error { OutOfMemory };
 const wgpu = @import("wgpu");
 const util = @import("./util.zig");
 const enums = @import("./enums.zig");
@@ -49,7 +50,7 @@ pub fn Layout(comptime layout: anytype) type { return struct {
         self.* = undefined;
     }
 
-    pub fn init(interface: *Interface) !_Layout {
+    pub fn init(interface: *Interface) OOM!_Layout {
         const entries: [meta.fields.len]wgpu.WGPUBindGroupLayoutEntry = comptime b: {
             var entries: [meta.fields.len]wgpu.WGPUBindGroupLayoutEntry = undefined;
             for (0..meta.fields.len) |i| {
@@ -98,7 +99,7 @@ pub fn Layout(comptime layout: anytype) type { return struct {
         const inner = wgpu.wgpuDeviceCreateBindGroupLayout(interface.device, &.{
             .entryCount = entries.len,
             .entries = &entries
-        }) orelse return error.CreateBindGroupFailed;
+        }) orelse unreachable;
 
         return .{ .inner = inner };
     }
@@ -128,7 +129,7 @@ pub fn Layout(comptime layout: anytype) type { return struct {
         }});
     };
 
-    fn instance(self: *const _Layout, interface: *Interface, values: Values) !BindGroup {
+    fn instance(self: *const _Layout, interface: *Interface, values: Values) OOM!BindGroup {
         var entries: [meta.fields.len]wgpu.WGPUBindGroupEntry = undefined;
         inline for (0..meta.fields.len) |i| {
             entries[i] = .{
@@ -154,7 +155,7 @@ pub fn Layout(comptime layout: anytype) type { return struct {
             .layout = self.inner,
             .entryCount = entries.len,
             .entries = &entries
-        }) orelse return error.CreateBindGroupInstanceFailed;
+        }) orelse unreachable;
 
         return .{ .inner = inner };
     }
@@ -167,7 +168,7 @@ pub fn deinit(self: *BindGroup) void {
     self.* = undefined;
 }
 
-pub fn init(interface: *Interface, comptime layout: anytype, values: Layout(layout).Values) !BindGroup {
+pub fn init(interface: *Interface, comptime layout: anytype, values: Layout(layout).Values) OOM!BindGroup {
     var bind_group: Layout(layout) = try .init(interface);
     defer bind_group.deinit();
 

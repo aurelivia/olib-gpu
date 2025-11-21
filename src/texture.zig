@@ -1,4 +1,5 @@
 const std = @import("std");
+const OOM = error { OutOfMemory };
 const wgpu = @import("wgpu");
 const util = @import("./util.zig");
 const enums = @import("./enums.zig");
@@ -68,7 +69,7 @@ pub const Layout = struct {
     } = null
 };
 
-pub fn init(interface: *Interface, width: u32, height: u32, comptime layout: Layout) !Self {
+pub fn init(interface: *Interface, width: u32, height: u32, comptime layout: Layout) OOM!Self {
     const inner = wgpu.wgpuDeviceCreateTexture(interface.device, &.{
         .usage = @intFromEnum(layout.usage),
         .format = @intFromEnum(layout.format),
@@ -76,8 +77,7 @@ pub fn init(interface: *Interface, width: u32, height: u32, comptime layout: Lay
         .size = .{ .width = width, .height = height, .depthOrArrayLayers = 1 },
         .mipLevelCount = 1,
         .sampleCount = 1
-    }) orelse return error.CreateTextureFailed;
-    errdefer wgpu.wgpuTextureRelease(inner);
+    }) orelse unreachable;
 
     var view: wgpu.WGPUTextureView = null;
     const view_layout: @FieldType(Layout, "view") =
@@ -92,8 +92,7 @@ pub fn init(interface: *Interface, width: u32, height: u32, comptime layout: Lay
             .arrayLayerCount = wgpu.WGPU_ARRAY_LAYER_COUNT_UNDEFINED,
             .aspect = wgpu.WGPUTextureAspect_All,
             .usage = wgpu.WGPUTextureUsage_None
-        }) orelse return error.CreateTextureViewFailed;
-        errdefer wgpu.wgpuTextureViewRelease(view);
+        }) orelse unreachable;
     }
 
     var sampler: wgpu.WGPUSampler = null;
@@ -111,8 +110,7 @@ pub fn init(interface: *Interface, width: u32, height: u32, comptime layout: Lay
             .lodMaxClamp = samp.lod_max_clamp,
             .compare = @intFromEnum(samp.compare),
             .maxAnisotropy = samp.max_anisotropy
-        }) orelse return error.CreateSamplerFailed;
-        errdefer wgpu.wgpuSamplerRelease(sampler);
+        }) orelse unreachable;
     }
 
     var texture: Self = .{

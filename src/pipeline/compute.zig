@@ -1,6 +1,7 @@
 const ComputePipeline = @This();
 
 const std = @import("std");
+const OOM = error { OutOfMemory };
 const wgpu = @import("wgpu");
 const util = @import("../util.zig");
 const enums = @import("../enums.zig");
@@ -19,13 +20,13 @@ pub const Layout = struct {
     entry: []const u8 = "main"
 };
 
-pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups: anytype) !ComputePipeline {
+pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups: anytype) OOM!ComputePipeline {
     const shader = wgpu.wgpuDeviceCreateShaderModule(interface.device, &.{
         .nextInChain = @ptrCast(&wgpu.WGPUShaderSourceWGSL{
             .chain = .{ .sType = wgpu.WGPUSType_ShaderSourceWGSL },
             .code = util.toStringView(layout.source)
         })
-    }) orelse return error.CreateShaderFailed;
+    }) orelse unreachable;
     defer wgpu.wgpuShaderModuleRelease(shader);
 
     if (@typeInfo(@TypeOf(bind_groups)) != .@"struct") @compileError("bind_groups must be a tuple.");
@@ -38,7 +39,7 @@ pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups
     const pipeline_layout = wgpu.wgpuDeviceCreatePipelineLayout(interface.device, &.{
         .bindGroupLayoutCount = layout.bind_groups.len,
         .bindGroupLayouts = &bg_layouts
-    }) orelse return error.CreatePipelineLayoutFailed;
+    }) orelse unreachable;
     defer wgpu.wgpuPipelineLayoutRelease(pipeline_layout);
 
     const inner = wgpu.wgpuDeviceCreateComputePipeline(interface.device, &.{
@@ -47,7 +48,7 @@ pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups
             .module = shader,
             .entryPoint = util.toStringView(layout.entry)
         }
-    }) orelse return error.CreatePipelineFailed;
+    }) orelse unreachable;
 
     return .{ .inner = inner };
 }

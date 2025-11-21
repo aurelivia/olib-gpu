@@ -53,7 +53,20 @@ pub fn init(mem: std.mem.Allocator, comptime layout: Layout) !Self {
         else => wgpu.WGPULogLevel_Error
     });
 
-    const instance: util.Known(wgpu.WGPUInstance) = wgpu.wgpuCreateInstance(null) orelse return error.CreateInstanceFailed;
+    const instance: util.Known(wgpu.WGPUInstance) = wgpu.wgpuCreateInstance(&.{
+        .nextInChain = @ptrCast(&wgpu.WGPUInstanceExtras{
+            .chain = .{ .sType = wgpu.WGPUSType_InstanceExtras },
+            .backends = switch (layout.backend) {
+                .any => wgpu.WGPUInstanceBackend_All,
+                .webgpu => wgpu.WGPUInstanceBackend_BrowserWebGPU,
+                .d3d11 => wgpu.WGPUInstanceBackend_DX11,
+                .d3d12 => wgpu.WGPUInstanceBackend_DX12,
+                .metal => wgpu.WGPUInstanceBackend_Metal,
+                .vulkan => wgpu.WGPUInstanceBackend_Vulkan,
+                .opengl, .opengles => wgpu.WGPUInstanceBackend_GL
+            }
+        })
+    }) orelse unreachable;
     errdefer wgpu.wgpuInstanceRelease(instance);
 
     var adapter_response: AdapterResponse = undefined;
@@ -106,10 +119,8 @@ pub fn init(mem: std.mem.Allocator, comptime layout: Layout) !Self {
     };
     errdefer wgpu.wgpuDeviceRelease(device);
 
-    const queue = wgpu.wgpuDeviceGetQueue(device) orelse return error.CreateQueueFailed;
-    errdefer wgpu.wgpuQueueRelease(queue);
-
-    const encoder = wgpu.wgpuDeviceCreateCommandEncoder(device, &.{}) orelse return error.CreateEncoderFailed;
+    const queue = wgpu.wgpuDeviceGetQueue(device) orelse unreachable;
+    const encoder = wgpu.wgpuDeviceCreateCommandEncoder(device, &.{}) orelse unreachable;
 
     return .{
         .mem = mem,
@@ -118,7 +129,7 @@ pub fn init(mem: std.mem.Allocator, comptime layout: Layout) !Self {
         .device = device,
         .queue = queue,
         .encoder = encoder,
-        .buffer_mappings = .empty
+        .mapped = .init()
     };
 }
 
@@ -170,6 +181,13 @@ fn deviceLost(
 ) callconv(.C) void {
     if (util.fromStringView(message)) |m| wgpuLog.err("{s}", .{ m });
     @panic("WGPU Error");
+
+    // last_result = switch (reason) {
+    //     wgpu.WGPUDeviceLostReason_Destroyed => WGPUError.DeviceDestroyed,
+    //     wgpu.WGPUDeviceLostReason_InstanceDropped => WGPUError.InstanceDropped,
+    //     wgpu.WGPUDeviceLostReason_FailedCreation => WGPUError.FailedCreation,
+    //     else => WGPUError.Unspecified
+    // };
 }
 
 fn deviceUncapturedError(
@@ -181,6 +199,14 @@ fn deviceUncapturedError(
         wgpu.WGPUErrorType_NoError => {},
         else => @panic("WGPU Error")
     }
+
+    // last_result = switch (error_type) {
+    //     wgpu.WGPUErrorType_NoError => null,
+    //     wgpu.WGPUErrorType_Validation => WGPUError.Validation,
+    //     wgpu.WGPUErrorType_OutOfMemory => WGPUError.OutOfMemory,
+    //     wgpu.WGPUErrorType_Internal => WGPUError.Internal,
+    //     else => WGPUError.Unspecified
+    // };
 }
 
 fn logCallback(level: wgpu.WGPULogLevel, message: wgpu.WGPUStringView, _: ?*anyopaque) callconv(.C) void {
@@ -196,21 +222,19 @@ fn logCallback(level: wgpu.WGPULogLevel, message: wgpu.WGPUStringView, _: ?*anyo
     }
 }
 
-pub fn submit(self: *Self) !void {
-    for (self.buffer_mappings.items) |buf| {
-        buf.mapping = null;
-        wgpu.wgpuBufferUnmap(buf.buffer);
+pub fn submit(self: *Self) void {
+    while (self.mapped.pop()) |buf| {
+        buf.unmap();
+        if (buf.dest) |dest| {
+            wgpu.wgpuCommandEncoderCopyBufferToBuffer(self.encoder, buf.buffer, 0, dest, 0, buf.byte_len);
+            buf.dest = null;
+        }
     }
 
     const commands = wgpu.wgpuCommandEncoderFinish(self.encoder, &.{}) orelse return error.CommandEncodingError;
     defer wgpu.wgpuCommandBufferRelease(commands);
     wgpu.wgpuQueueSubmit(self.queue, 1, &[1]wgpu.WGPUCommandBuffer{commands});
     wgpu.wgpuCommandEncoderRelease(self.encoder);
-
-    for (self.buffer_mappings.items) |buf| {
-        buf.copy_queued = false;
-        if (buf.wants_mapping) buf.map();
-    }
 
     self.encoder = wgpu.wgpuDeviceCreateCommandEncoder(self.device, &.{}) orelse return error.CreateEncoderFailed;
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const OOM = error { OutOfMemory };
 const wgpu = @import("wgpu");
 const util = @import("./util.zig");
 const enums = @import("./enums.zig");
@@ -7,7 +8,7 @@ const log = std.log.scoped(.@"olib-gpu");
 const Interface = @import("./interface.zig");
 const Surface = @import("./surface.zig");
 const RenderPipeline = @import("./pipeline/render.zig");
-const BufferSlice = @import("./buffer/slice.zig");
+const GPUSlice = @import("./buffer/gpu_slice.zig");
 const Texture = @import("./texture.zig");
 const BindGroup = @import("./bind_group.zig");
 
@@ -28,7 +29,7 @@ pub fn deinit(self: *Self) void {
     self.* = undefined;
 }
 
-fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture), depth: ?wgpu.WGPUTexture) !Self {
+fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture), depth: ?wgpu.WGPUTexture) OOM!Self {
     const view = wgpu.wgpuTextureCreateView(target, &.{
         .format = wgpu.WGPUTextureFormat_Undefined,
         .dimension = wgpu.WGPUTextureViewDimension_Undefined,
@@ -38,8 +39,7 @@ fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture), depth:
         .arrayLayerCount = wgpu.WGPU_ARRAY_LAYER_COUNT_UNDEFINED,
         .aspect = wgpu.WGPUTextureAspect_All,
         .usage = wgpu.WGPUTextureUsage_None
-    }) orelse return error.CreateTextureViewFailed;
-    errdefer wgpu.wgpuTextureViewRelease(view);
+    }) orelse unreachable;
 
     var depth_view: wgpu.WGPUTextureView = null;
     if (depth) |d| {
@@ -52,8 +52,7 @@ fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture), depth:
             .arrayLayerCount = wgpu.WGPU_ARRAY_LAYER_COUNT_UNDEFINED,
             .aspect = wgpu.WGPUTextureAspect_All,
             .usage = wgpu.WGPUTextureUsage_None
-        }) orelse return error.CreateTextureViewFailed;
-        errdefer wgpu.wgpuTextureViewRelease(depth_view);
+        }) orelse unreachable;
     }
 
     const pass = wgpu.wgpuCommandEncoderBeginRenderPass(interface.encoder, &.{
@@ -71,7 +70,7 @@ fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture), depth:
             .depthClearValue = 1.0,
             .depthReadOnly = @intFromBool(false)
         } else null
-    }) orelse return error.CreateRenderPassFailed;
+    }) orelse unreachable;
 
     return .{
         .interface = interface,
@@ -82,19 +81,19 @@ fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture), depth:
     };
 }
 
-pub fn init(interface: *Interface, target: Texture) !Self {
+pub fn init(interface: *Interface, target: Texture) OOM!Self {
     return initInner(interface, target.inner, null);
 }
 
-pub fn initWithDepth(interface: *Interface, target: Texture, depth: Texture) !Self {
+pub fn initWithDepth(interface: *Interface, target: Texture, depth: Texture) OOM!Self {
     return initInner(interface, target.inner, depth.inner);
 }
 
-pub fn fromSurface(surface: *Surface) !Self {
+pub fn fromSurface(surface: *Surface) OOM!Self {
     const target: util.Known(wgpu.WGPUTexture) = b: {
         var texture: wgpu.WGPUSurfaceTexture = undefined;
         wgpu.wgpuSurfaceGetCurrentTexture(surface.inner, &texture);
-        break :b texture.texture orelse return error.CreateTextureFailed;
+        break :b texture.texture orelse unreachable;
     };
 
     return if (surface.depth) |depth| initInner(surface.interface, target, depth.inner)

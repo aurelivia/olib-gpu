@@ -1,6 +1,7 @@
 const RenderPipeline = @This();
 
 const std = @import("std");
+const OOM = error { OutOfMemory };
 const wgpu = @import("wgpu");
 const util = @import("../util.zig");
 const enums = @import("../enums.zig");
@@ -110,13 +111,13 @@ pub const Layout = struct {
     }
 };
 
-pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups: anytype) !RenderPipeline {
+pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups: anytype) OOM!RenderPipeline {
     const frag_shader = wgpu.wgpuDeviceCreateShaderModule(interface.device, &.{
         .nextInChain = @ptrCast(&wgpu.WGPUShaderSourceWGSL{
             .chain = .{ .sType = wgpu.WGPUSType_ShaderSourceWGSL },
             .code = util.toStringView(layout.fragment.source)
         })
-    }) orelse return error.CreateShaderFailed;
+    }) orelse unreachable;
     defer wgpu.wgpuShaderModuleRelease(frag_shader);
 
     const vert_shader = if (layout.vertex) |vert_layout| if (vert_layout.source) |src| b: {
@@ -125,7 +126,7 @@ pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups
                 .chain = .{ .sType = wgpu.WGPUSType_ShaderSourceWGSL },
                 .code = util.toStringView(src)
             })
-        }) orelse return error.CreateShaderFailed;
+        }) orelse unreachable;
         break :b vs;
     } else null;
     defer if (vert_shader) |vs| wgpu.wgpuShaderModuleRelease(vs);
@@ -140,7 +141,7 @@ pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups
     const pipeline_layout = wgpu.wgpuDeviceCreatePipelineLayout(interface.device, &.{
         .bindGroupLayoutCount = bg_layouts.len,
         .bindGroupLayouts = &bg_layouts
-    }) orelse return error.CreatePipelineLayoutFailed;
+    }) orelse unreachable;
     defer wgpu.wgpuPipelineLayoutRelease(pipeline_layout);
 
     const targets: [layout.fragment.targets.len]wgpu.WGPUColorTargetState = comptime b: {
@@ -216,7 +217,7 @@ pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups
             .mask = ~@as(u32, 0),
             .alphaToCoverageEnabled = @intFromBool(false)
         }
-    }) orelse return error.CreatePipelineFailed;
+    }) orelse unreachable;
 
     return .{ .inner = inner };
 }
