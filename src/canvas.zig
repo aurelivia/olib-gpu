@@ -1,3 +1,5 @@
+const Canvas = @This();
+
 const std = @import("std");
 const OOM = error { OutOfMemory };
 const wgpu = @import("wgpu");
@@ -14,57 +16,35 @@ const BindGroup = @import("./bind_group.zig");
 
 pub const Usage = enums.TextureUsage;
 
-const Self = @This();
-interface: *Interface,
-target: util.Known(wgpu.WGPUTexture),
-view: util.Known(wgpu.WGPUTextureView),
-depth_view: wgpu.WGPUTextureView,
 pass: wgpu.WGPURenderPassEncoder,
 pipeline_set: bool = false,
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *Canvas) void {
     if (self.pass) |pass| wgpu.wgpuRenderPassEncoderRelease(pass);
-    if (self.depth_view) |depth_view| wgpu.wgpuTextureViewRelease(depth_view);
-    wgpu.wgpuTextureViewRelease(self.view);
     self.* = undefined;
 }
 
-fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture), depth: ?wgpu.WGPUTexture) OOM!Self {
-    const view = wgpu.wgpuTextureCreateView(target, &.{
-        .format = wgpu.WGPUTextureFormat_Undefined,
-        .dimension = wgpu.WGPUTextureViewDimension_Undefined,
-        .baseMipLevel = 0,
-        .mipLevelCount = wgpu.WGPU_MIP_LEVEL_COUNT_UNDEFINED,
-        .baseArrayLayer = 0,
-        .arrayLayerCount = wgpu.WGPU_ARRAY_LAYER_COUNT_UNDEFINED,
-        .aspect = wgpu.WGPUTextureAspect_All,
-        .usage = wgpu.WGPUTextureUsage_None
-    }) orelse unreachable;
-
-    var depth_view: wgpu.WGPUTextureView = null;
-    if (depth) |d| {
-        depth_view = wgpu.wgpuTextureCreateView(d, &.{
-            .format = wgpu.WGPUTextureFormat_Undefined,
-            .dimension = wgpu.WGPUTextureViewDimension_Undefined,
-            .baseMipLevel = 0,
-            .mipLevelCount = wgpu.WGPU_MIP_LEVEL_COUNT_UNDEFINED,
-            .baseArrayLayer = 0,
-            .arrayLayerCount = wgpu.WGPU_ARRAY_LAYER_COUNT_UNDEFINED,
-            .aspect = wgpu.WGPUTextureAspect_All,
-            .usage = wgpu.WGPUTextureUsage_None
-        }) orelse unreachable;
+pub fn init(interface: *Interface, targets: []const Texture, depth: ?Texture) OOM!Canvas {
+    if (targets.len > 64) {
+        log.err("Target slice of length {d} exceeds maximum of 64.", .{ targets.len });
+        unreachable;
     }
 
-    const pass = wgpu.wgpuCommandEncoderBeginRenderPass(interface.encoder, &.{
-        .colorAttachmentCount = 1,
-        .colorAttachments = &[_]wgpu.WGPURenderPassColorAttachment{.{
-            .view = view,
+    var color_attachments: [64]wgpu.WGPURenderPassColorAttachment = undefined;
+    for (targets, 0..) |target, i| {
+        color_attachments[i] = .{
+            .view = target.view,
             .depthSlice = wgpu.WGPU_DEPTH_SLICE_UNDEFINED,
             .loadOp = wgpu.WGPULoadOp_Clear,
             .storeOp = wgpu.WGPUStoreOp_Store
-        }},
-        .depthStencilAttachment = if (depth) |_| &.{
-            .view = depth_view,
+        };
+    }
+
+    const pass = wgpu.wgpuCommandEncoderBeginRenderPass(interface.encoder, &.{
+        .colorAttachmentCount = targets.len,
+        .colorAttachments = @as([*c]wgpu.WGPURenderPassColorAttachment, &color_attachments),
+        .depthStencilAttachment = if (depth) |d| &.{
+            .view = d.view,
             .depthLoadOp = wgpu.WGPULoadOp_Clear,
             .depthStoreOp = wgpu.WGPUStoreOp_Store,
             .depthClearValue = 1.0,
@@ -72,35 +52,10 @@ fn initInner(interface: *Interface, target: util.Known(wgpu.WGPUTexture), depth:
         } else null
     }) orelse unreachable;
 
-    return .{
-        .interface = interface,
-        .target = target,
-        .view = view,
-        .depth_view = depth_view,
-        .pass = pass
-    };
+    return .{ .pass = pass };
 }
 
-pub fn init(interface: *Interface, target: Texture) OOM!Self {
-    return initInner(interface, target.inner, null);
-}
-
-pub fn initWithDepth(interface: *Interface, target: Texture, depth: Texture) OOM!Self {
-    return initInner(interface, target.inner, depth.inner);
-}
-
-pub fn fromSurface(surface: *Surface) OOM!Self {
-    const target: util.Known(wgpu.WGPUTexture) = b: {
-        var texture: wgpu.WGPUSurfaceTexture = undefined;
-        wgpu.wgpuSurfaceGetCurrentTexture(surface.inner, &texture);
-        break :b texture.texture orelse unreachable;
-    };
-
-    return if (surface.depth) |depth| initInner(surface.interface, target, depth.inner)
-         else initInner(surface.interface, target, null);
-}
-
-fn assertCanDraw(self: *Self) util.Known(wgpu.WGPURenderPassEncoder) {
+fn assertCanDraw(self: *Canvas) util.Known(wgpu.WGPURenderPassEncoder) {
     if (self.pass) |pass| {
         if (!self.pipeline_set) {
             log.err("Attempt to draw or bind to canvas without pipeline sourced.", .{});
@@ -113,7 +68,7 @@ fn assertCanDraw(self: *Self) util.Known(wgpu.WGPURenderPassEncoder) {
     }
 }
 
-pub fn source(self: *Self, pipeline: RenderPipeline) void {
+pub fn source(self: *Canvas, pipeline: RenderPipeline) void {
     if (self.pass) |pass| {
         wgpu.wgpuRenderPassEncoderSetPipeline(pass, pipeline.inner);
         self.pipeline_set = true;
@@ -123,17 +78,17 @@ pub fn source(self: *Self, pipeline: RenderPipeline) void {
     }
 }
 
-pub fn bind(self: *Self, num: u32, binding: BindGroup) void {
+pub fn bind(self: *Canvas, num: u32, binding: BindGroup) void {
     const pass = self.assertCanDraw();
     wgpu.wgpuRenderPassEncoderSetBindGroup(pass, num, binding.inner, 0, null);
 }
 
-pub fn drawGenerated(self: *Self, offset: u32, len: u32) void {
+pub fn drawGenerated(self: *Canvas, offset: u32, len: u32) void {
     const pass = self.assertCanDraw();
     wgpu.wgpuRenderPassEncoderDraw(pass, len, 1, offset, 0);
 }
 
-pub fn draw(self: *Self, vertices: GPUSlice, indexes: ?GPUSlice, instances: ?GPUSlice) void {
+pub fn draw(self: *Canvas, vertices: GPUSlice, indexes: ?GPUSlice, instances: ?GPUSlice) void {
     const pass = self.assertCanDraw();
     wgpu.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, vertices.source, vertices.byte_offset, vertices.byte_len);
     const instance_offset: u32 = if (instances) |i| i.offset else 0;
@@ -145,7 +100,7 @@ pub fn draw(self: *Self, vertices: GPUSlice, indexes: ?GPUSlice, instances: ?GPU
     } else wgpu.wgpuRenderPassEncoderDraw(pass, vertices.len, instance_len, vertices.offset, instance_offset);
 }
 
-pub fn finish(self: *Self) void {
+pub fn finish(self: *Canvas) void {
     if (self.pass) |pass| {
         wgpu.wgpuRenderPassEncoderEnd(pass);
         wgpu.wgpuRenderPassEncoderRelease(pass);

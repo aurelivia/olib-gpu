@@ -136,8 +136,35 @@ pub fn resize(self: *Self, width: u32, height: u32) OOM!void {
     }
 }
 
+pub fn getCurrentTexture(self: *Self) Texture {
+    const inner = b: {
+        var texture: wgpu.WGPUSurfaceTexture = undefined;
+        wgpu.wgpuSurfaceGetCurrentTexture(self.inner, &texture);
+        break :b texture.texture orelse unreachable;
+    };
+
+    return .{
+        .inner = inner,
+        .width = self.config.width,
+        .height = self.config.height,
+        .format = self.format,
+        .view = wgpu.wgpuTextureCreateView(inner, &.{
+            .format = wgpu.WGPUTextureFormat_Undefined,
+            .dimension = wgpu.WGPUTextureViewDimension_Undefined,
+            .baseMipLevel = 0,
+            .mipLevelCount = wgpu.WGPU_MIP_LEVEL_COUNT_UNDEFINED,
+            .baseArrayLayer = 0,
+            .arrayLayerCount = wgpu.WGPU_ARRAY_LAYER_COUNT_UNDEFINED,
+            .aspect = wgpu.WGPUTextureAspect_All,
+            .usage = wgpu.WGPUTextureUsage_None
+        }) orelse unreachable,
+        .sampler = null,
+        .bind_group = null
+    };
+}
+
 pub fn canvas(self: *Self) OOM!Canvas {
-    return Canvas.fromSurface(self);
+    return try Canvas.init(self.interface, &[1]Texture{ self.getCurrentTexture() }, self.depth);
 }
 
 pub fn present(self: *Self) void {

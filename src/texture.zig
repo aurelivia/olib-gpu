@@ -96,9 +96,7 @@ pub fn init(interface: *Interface, width: u32, height: u32, comptime layout: Lay
     }
 
     var sampler: wgpu.WGPUSampler = null;
-    const sampler_layout: @FieldType(Layout, "sampler") =
-        if (layout.usage.is(Usage.texture_binding) and layout.sampler == null) .{} else layout.sampler;
-    if (sampler_layout) |samp| {
+    if (layout.sampler) |samp| {
         sampler = wgpu.wgpuDeviceCreateSampler(interface.device, &.{
             .addressModeU = @intFromEnum(samp.address_mode_u orelse samp.address_mode),
             .addressModeV = @intFromEnum(samp.address_mode_v orelse samp.address_mode),

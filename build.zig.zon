@@ -4,7 +4,10 @@
     .fingerprint = 0x3d500f44e7e2be50, // Changing this has security and trust implications.
     .minimum_zig_version = "0.14.0",
     .dependencies = .{
-        .collections = .{ .path = "../olib-collections" },
+        .collections = .{
+            .url = "git+https://github.com/aurelivia/olib-collections#5345730e427642a9bdf293fda29f7b81a6d77a75",
+            .hash = "olib_collections-0.0.0-bhQ5PK4wAQDAKUInv9nR4zBy4l1yp1OkaXvh1E74q23T",
+        },
 
         .wgpu_linux_aarch64_debug = .{
             .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v25.0.2.1/wgpu-linux-aarch64-debug.zip",
