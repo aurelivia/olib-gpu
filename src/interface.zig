@@ -143,7 +143,7 @@ const AdapterResponse = struct {
 fn adapterCallback(
     status: wgpu.WGPURequestAdapterStatus, adapter: wgpu.WGPUAdapter, message: wgpu.WGPUStringView,
     userdata1: ?*anyopaque, userdata2: ?*anyopaque
-) callconv(.C) void {
+) callconv(.c) void {
     const response: *AdapterResponse = @ptrCast(@alignCast(userdata1));
     response.* = .{
         .status = status,
@@ -164,7 +164,7 @@ const DeviceResponse = struct {
 fn deviceCallback(
     status: wgpu.WGPURequestDeviceStatus, device: wgpu.WGPUDevice, message: wgpu.WGPUStringView,
     userdata1: ?*anyopaque, userdata2: ?*anyopaque
-) callconv(.C) void {
+) callconv(.c) void {
     const response: *DeviceResponse = @ptrCast(@alignCast(userdata1));
     response.* = .{
         .status = status,
@@ -179,7 +179,7 @@ fn deviceCallback(
 fn deviceLost(
     _: [*c]const wgpu.WGPUDevice, _: wgpu.WGPUDeviceLostReason, message: wgpu.WGPUStringView,
     _: ?*anyopaque, _: ?*anyopaque
-) callconv(.C) void {
+) callconv(.c) void {
     if (util.fromStringView(message)) |m| wgpuLog.err("{s}", .{ m });
     @panic("WGPU Error");
 
@@ -194,7 +194,7 @@ fn deviceLost(
 fn deviceUncapturedError(
     _: [*c]const wgpu.WGPUDevice, error_type: wgpu.WGPUErrorType, message: wgpu.WGPUStringView,
     _: ?*anyopaque, _: ?*anyopaque
-) callconv(.C) void {
+) callconv(.c) void {
     if (util.fromStringView(message)) |m| wgpuLog.err("{s}", .{ m });
     switch (error_type) {
         wgpu.WGPUErrorType_NoError => {},
@@ -210,7 +210,7 @@ fn deviceUncapturedError(
     // };
 }
 
-fn logCallback(level: wgpu.WGPULogLevel, message: wgpu.WGPUStringView, _: ?*anyopaque) callconv(.C) void {
+fn logCallback(level: wgpu.WGPULogLevel, message: wgpu.WGPUStringView, _: ?*anyopaque) callconv(.c) void {
     switch (level) {
         wgpu.WGPULogLevel_Error => {
             if (util.fromStringView(message)) |m| wgpuLog.err("{s}", .{ m });

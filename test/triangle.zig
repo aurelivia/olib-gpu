@@ -68,7 +68,8 @@ pub fn main() !void {
     interface.submit();
 
     var dest = try zigimg.Image.fromRawPixels(mem, width, height, output.items(), .bgra32);
-    defer dest.deinit();
+    defer dest.deinit(mem);
 
-    try dest.writeToFilePath("./test/triangle.bmp", .{ .bmp = .{} });
+    var buf: [zigimg.io.DEFAULT_BUFFER_SIZE]u8 = undefined;
+    try dest.writeToFilePath(mem, "./test/triangle.bmp", buf[0..], .{ .bmp = .{} });
 }

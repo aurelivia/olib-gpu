@@ -2,7 +2,7 @@
     .name = .olib_gpu,
     .version = "0.0.0",
     .fingerprint = 0x3d500f44e7e2be50, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.15.0",
     .dependencies = .{
         .collections = .{
             .url = "git+https://github.com/aurelivia/olib-collections#5345730e427642a9bdf293fda29f7b81a6d77a75",
@@ -82,8 +82,8 @@
 
         // For testing
         .zigimg = .{
-            .url = "git+https://github.com/zigimg/zigimg.git#31bd433201d12d6aa700074d751a7db4555cdb0d",
-            .hash = "zigimg-0.1.0-8_eo2qClEgC8dTSiSO6vqGe7mdtIkobGi-Uc4d0Eo7_2"
+            .url = "git+https://github.com/zigimg/zigimg#b53e228986e127df1223975227969ed6a50126e7",
+            .hash = "zigimg-0.1.0-8_eo2rwbFgCSVcvqipgjAQueoazrTAiIvqk0F2bKYpE1",
         },
     },
     .paths = .{

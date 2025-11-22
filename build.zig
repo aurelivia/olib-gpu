@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
     tests.addImport("olib-gpu", root);
     const zigimg = b.dependency("zigimg", .{ .target = target, .optimize = optimize });
     tests.addImport("zigimg", zigimg.module("zigimg"));
-    const test_step = b.addTest(.{ .root_module = tests });
+    const test_step = b.addTest(.{ .root_module = tests, .use_llvm = true }); // use_llvm required until https://github.com/ziglang/zig/issues/25565
     run_tests.dependOn(&b.addRunArtifact(test_step).step);
 
     const os = @tagName(target.result.os.tag);
