@@ -176,7 +176,7 @@ pub fn present(self: *Self) void {
 
 fn getDepthTexture(self: *Self) OOM!Texture {
     return try .init(self.interface, self.config.width, self.config.height, .{
-        .usage = Texture.Usage.render_attachment.with(.texture_binding),
+        .usage = Texture.Usage.surface,
         .format = .depth32_float,
         .sampler = .{
             .mag_filter = .linear,

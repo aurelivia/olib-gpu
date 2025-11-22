@@ -31,43 +31,43 @@ const height = 480;
 const bytes_per_row = 4 * width;
 const total_size = bytes_per_row * height;
 
+const mem = std.testing.allocator;
+
 pub fn main() !void {
-    var interface: gpu.Interface = try .init();
+    var interface: gpu.Interface = try .init(mem, .{});
     defer interface.deinit();
 
-    var shader: gpu.Shader = try .init(&interface, shader_src);
-    defer shader.deinit();
-
-    var output: gpu.Buffer = try .init(&interface, .{ .output = .{ .size = total_size }});
-    defer output.deinit();
-
-    var canvas: gpu.Canvas = try .init(&interface, .{ .width = width, .height = height });
-    defer canvas.deinit();
-
-    var pipeline: gpu.Pipeline.Render = try .init(&interface, shader, .{
+    var pipeline: gpu.Pipeline.Render = try .init(&interface, .{
         .vertex = .{},
+        .depth = false,
         .fragment = .{
-            .target = .{
-                .blend = .{
-                    .color = .{ .op = .add, .source_factor = .src_alpha, .dest_factor = .one_minus_src_alpha },
-                    .alpha = .{ .op = .add, .source_factor = .zero, .dest_factor = .one }
-                }
-            }
+            .source = shader_src,
+            .targets = &.{.{ .format = .bgra8_unorm_srgb, .blend = gpu.Pipeline.Render.BlendState.alpha_blending }}
         }
-    });
+    }, .{});
     defer pipeline.deinit();
 
-    canvas.setPipeline(pipeline);
-    canvas.draw();
-    canvas.end();
+    var surface: gpu.Texture = try .init(&interface, width, height, .{
+        .usage = gpu.Texture.Usage.surface.with(.copy_source),
+        .format = .bgra8_unorm_srgb
+    });
+    defer surface.deinit();
 
-    canvas.copyToBuffer(&output, bytes_per_row);
-    try canvas.submit();
+    var output: gpu.Buffer.Mapped(.output, u8) = try .init(&interface, total_size);
+    defer output.deinit();
 
-    const result = try output.mapRead();
-    defer output.unmap();
+    var canvas: gpu.Canvas = try .init(&interface, &.{ surface }, null);
+    defer canvas.deinit();
 
-    var dest = try zigimg.Image.fromRawPixels(std.testing.allocator, width, height, result, .bgra32);
+    canvas.source(pipeline);
+    canvas.drawGenerated(0, 3);
+    canvas.finish();
+
+    output.copyTexture(surface);
+
+    interface.submit();
+
+    var dest = try zigimg.Image.fromRawPixels(mem, width, height, output.items(), .bgra32);
     defer dest.deinit();
 
     try dest.writeToFilePath("./test/triangle.bmp", .{ .bmp = .{} });

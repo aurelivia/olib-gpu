@@ -1,3 +1,5 @@
+const Texture = @This();
+
 const std = @import("std");
 const OOM = error { OutOfMemory };
 const wgpu = @import("wgpu");
@@ -5,8 +7,6 @@ const util = @import("./util.zig");
 const enums = @import("./enums.zig");
 const Interface = @import("./interface.zig");
 const BindGroup = @import("./bind_group.zig");
-
-const Self = @This();
 
 pub const Format = enums.TextureFormat;
 
@@ -22,6 +22,8 @@ pub const Usage = enum (wgpu.WGPUTextureUsage) {
     pub fn with(a: Usage, b: Usage) Usage { return @enumFromInt(@intFromEnum(a) | @intFromEnum(b)); }
     pub fn is(a: Usage, b: Usage) bool { return (@intFromEnum(a) & @intFromEnum(b)) != 0; }
     pub fn isNot(a: Usage, b: Usage) bool { return !a.is(b); }
+
+    pub const surface: Usage = Usage.render_attachment.with(Usage.texture_binding);
 };
 
 pub const BindGroupLayout = .{
@@ -41,7 +43,7 @@ view: wgpu.WGPUTextureView,
 sampler: wgpu.WGPUSampler,
 bind_group: ?BindGroup,
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *Texture) void {
     if (self.bind_group) |*bg| bg.deinit();
     if (self.sampler) |samp| wgpu.wgpuSamplerRelease(samp);
     if (self.view) |view| wgpu.wgpuTextureViewRelease(view);
@@ -69,7 +71,7 @@ pub const Layout = struct {
     } = null
 };
 
-pub fn init(interface: *Interface, width: u32, height: u32, comptime layout: Layout) OOM!Self {
+pub fn init(interface: *Interface, width: u32, height: u32, comptime layout: Layout) OOM!Texture {
     const inner = wgpu.wgpuDeviceCreateTexture(interface.device, &.{
         .usage = @intFromEnum(layout.usage),
         .format = @intFromEnum(layout.format),
@@ -111,7 +113,7 @@ pub fn init(interface: *Interface, width: u32, height: u32, comptime layout: Lay
         }) orelse unreachable;
     }
 
-    var texture: Self = .{
+    var texture: Texture = .{
         .inner = inner,
         .width = width,
         .height = height,
@@ -134,8 +136,19 @@ pub fn init(interface: *Interface, width: u32, height: u32, comptime layout: Lay
     return texture;
 }
 
-pub fn write(self: *Self, interface: *Interface, data: []u8) void {
-    const bytes = bytesFor(self.format);
+pub fn bytesForFormat(format: enums.TextureFormat) u32 {
+    return switch (format) {
+        .bgra8_unorm_srgb => 4,
+        else => @panic("Ionno.")
+    };
+}
+
+pub fn bytesPerRow(self: *const Texture) u32 {
+    return bytesForFormat(self.format) * self.width;
+}
+
+pub fn write(self: *Texture, interface: *Interface, data: []u8) void {
+    const bytes = bytesForFormat(self.format);
     wgpu.wgpuQueueWriteTexture(interface.queue,
         &.{
             .texture = self.inner,
@@ -148,11 +161,4 @@ pub fn write(self: *Self, interface: *Interface, data: []u8) void {
         &.{ .offset = 0, .bytesPerRow = bytes * self.width, .rowsPerImage = self.height },
         &.{ .width = self.width, .height = self.height, .depthOrArrayLayers = 1 }
     );
-}
-
-pub fn bytesFor(format: enums.TextureFormat) u32 {
-    return switch (format) {
-        .bgra8_unorm_srgb => 4,
-        else => @panic("Ionno.")
-    };
 }

@@ -25,6 +25,10 @@ pub fn deinit(self: *Canvas) void {
 }
 
 pub fn init(interface: *Interface, targets: []const Texture, depth: ?Texture) OOM!Canvas {
+    if (targets.len == 0) {
+        log.err("At least one target is required.", .{});
+        unreachable;
+    }
     if (targets.len > 64) {
         log.err("Target slice of length {d} exceeds maximum of 64.", .{ targets.len });
         unreachable;

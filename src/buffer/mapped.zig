@@ -6,6 +6,7 @@ const log = std.log.scoped(.@"olib-gpu");
 
 const Interface = @import("../interface.zig");
 const GPUSlice = @import("./gpu_slice.zig");
+const Texture = @import("../texture.zig");
 
 pub const Direction = enum (wgpu.WGPUBufferUsage) {
     input = wgpu.WGPUBufferUsage_MapWrite | wgpu.WGPUBufferUsage_CopySrc,
@@ -271,5 +272,33 @@ pub fn _Mapped(comptime Dir: Direction, comptime T: type) type { return struct {
 
     pub fn gpuSliceAll(self: *Mapped) GPUSlice {
         return self.gpuSlice(0, self.len);
+    }
+
+    pub fn copyTexture(self: *Mapped, texture: Texture) void {
+        if (Dir == .input) unreachable;
+        const bpr = texture.bytesPerRow();
+        const total = bpr * texture.height;
+        if (total > self.capacity) {
+            log.err("Texture bytes {d} is greater than capacity {d}.", .{ total, self.capacity });
+            unreachable;
+        }
+        self.len = total;
+        wgpu.wgpuCommandEncoderCopyTextureToBuffer(self.interface.encoder, &.{
+            .texture = texture.inner,
+            .mipLevel = 0,
+            .origin = .{},
+            .aspect = wgpu.WGPUTextureAspect_All
+        }, &.{
+            .buffer = self.inner.buffer,
+            .layout = .{
+                .offset = 0,
+                .bytesPerRow = bpr,
+                .rowsPerImage = texture.height
+            }
+        }, &.{
+            .height = texture.height,
+            .width = texture.width,
+            .depthOrArrayLayers = 1
+        });
     }
 };}

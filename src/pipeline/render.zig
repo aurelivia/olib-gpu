@@ -211,7 +211,7 @@ pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups
             .depthBias = 0,
             .depthBiasSlopeScale = 0.0,
             .depthBiasClamp = 0.0
-        } else std.mem.zeroes(wgpu.WGPUDepthStencilState),
+        } else null,
         .multisample = .{
             .count = 1,
             .mask = ~@as(u32, 0),
