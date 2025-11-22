@@ -120,7 +120,7 @@ pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups
     }) orelse unreachable;
     defer wgpu.wgpuShaderModuleRelease(frag_shader);
 
-    const vert_shader = if (layout.vertex) |vert_layout| if (vert_layout.source) |src| b: {
+    const vert_shader = if (layout.vertex) |vert_layout| (if (vert_layout.source) |src| b: {
         const vs = wgpu.wgpuDeviceCreateShaderModule(interface.device, &.{
             .nextInChain = @ptrCast(&wgpu.WGPUShaderSourceWGSL{
                 .chain = .{ .sType = wgpu.WGPUSType_ShaderSourceWGSL },
@@ -128,7 +128,7 @@ pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups
             })
         }) orelse unreachable;
         break :b vs;
-    } else null;
+    } else null) else null;
     defer if (vert_shader) |vs| wgpu.wgpuShaderModuleRelease(vs);
 
     if (@typeInfo(@TypeOf(bind_groups)) != .@"struct") @compileError("bind_groups must be a tuple.");
@@ -178,12 +178,12 @@ pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups
             .entryPoint = util.toStringView(vert_layout.entry),
             .bufferCount = if (buffers) |b| b.len else 0,
             .buffers = if (buffers) |b| b.ptr else null
-        } else null,
+        } else std.mem.zeroes(wgpu.WGPUVertexState),
         .primitive = if (layout.vertex) |vert_layout| .{
             .topology = @intFromEnum(vert_layout.topology),
             .frontFace = if (vert_layout.clockwise) wgpu.WGPUFrontFace_CW else wgpu.WGPUFrontFace_CCW,
             .cullMode = @intFromEnum(vert_layout.cull_mode)
-        } else null,
+        } else std.mem.zeroes(wgpu.WGPUPrimitiveState),
         .fragment = &.{
             .module = frag_shader,
             .entryPoint = util.toStringView(layout.fragment.entry),
@@ -211,7 +211,7 @@ pub fn init(interface: *Interface, comptime layout: Layout, comptime bind_groups
             .depthBias = 0,
             .depthBiasSlopeScale = 0.0,
             .depthBiasClamp = 0.0
-        } else null,
+        } else std.mem.zeroes(wgpu.WGPUDepthStencilState),
         .multisample = .{
             .count = 1,
             .mask = ~@as(u32, 0),

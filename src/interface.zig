@@ -1,5 +1,6 @@
 const std = @import("std");
 const wgpu = @import("wgpu");
+const Queue = @import("collections").Queue;
 const util = @import("./util.zig");
 const log = std.log.scoped(.@"olib-gpu");
 const wgpuLog = std.log.scoped(.wgpu);
@@ -14,9 +15,10 @@ device: util.Known(wgpu.WGPUDevice),
 queue: util.Known(wgpu.WGPUQueue),
 encoder: util.Known(wgpu.WGPUCommandEncoder),
 
-buffer_mappings: std.ArrayListUnmanaged(*MappedBuffer.Inner),
+mapped: Queue(*MappedBuffer.Inner),
 
 pub fn deinit(self: *Self) void {
+    self.mapped.deinit(self.mem);
     wgpu.wgpuCommandEncoderRelease(self.encoder);
     wgpu.wgpuQueueRelease(self.queue);
     wgpu.wgpuDeviceRelease(self.device);
@@ -117,7 +119,6 @@ pub fn init(mem: std.mem.Allocator, comptime layout: Layout) !Self {
         wgpu.WGPURequestDeviceStatus_Success => device_response.device.?,
         else => return error.CreateDeviceFailed
     };
-    errdefer wgpu.wgpuDeviceRelease(device);
 
     const queue = wgpu.wgpuDeviceGetQueue(device) orelse unreachable;
     const encoder = wgpu.wgpuDeviceCreateCommandEncoder(device, &.{}) orelse unreachable;
@@ -146,7 +147,7 @@ fn adapterCallback(
     const response: *AdapterResponse = @ptrCast(@alignCast(userdata1));
     response.* = .{
         .status = status,
-        .message = util.fromStringView(message) orelse "",
+        .message = util.fromStringView(message) orelse "No message.",
         .adapter = adapter
     };
 
@@ -231,10 +232,10 @@ pub fn submit(self: *Self) void {
         }
     }
 
-    const commands = wgpu.wgpuCommandEncoderFinish(self.encoder, &.{}) orelse return error.CommandEncodingError;
+    const commands = wgpu.wgpuCommandEncoderFinish(self.encoder, &.{}) orelse unreachable;
     defer wgpu.wgpuCommandBufferRelease(commands);
     wgpu.wgpuQueueSubmit(self.queue, 1, &[1]wgpu.WGPUCommandBuffer{commands});
     wgpu.wgpuCommandEncoderRelease(self.encoder);
 
-    self.encoder = wgpu.wgpuDeviceCreateCommandEncoder(self.device, &.{}) orelse return error.CreateEncoderFailed;
+    self.encoder = wgpu.wgpuDeviceCreateCommandEncoder(self.device, &.{}) orelse unreachable;
 }

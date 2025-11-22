@@ -1,47 +1,70 @@
 const std = @import("std");
+const OOM = error { OutOfMemory };
 const wgpu = @import("wgpu");
 const util = @import("../util.zig");
 const log = std.log.scoped(.@"olib-gpu");
 
 const Interface = @import("../interface.zig");
-const Slice = @import("./slice.zig");
+const GPUSlice = @import("./gpu_slice.zig");
 
-pub const MapDir = enum (wgpu.WGPUBufferUsage) {
-    read = wgpu.WGPUBufferUsage_MapRead | wgpu.WGPUBufferUsage_CopyDst,
-    write = wgpu.WGPUBufferUsage_MapWrite | wgpu.WGPUBufferUsage_CopySrc
+pub const Direction = enum (wgpu.WGPUBufferUsage) {
+    input = wgpu.WGPUBufferUsage_MapWrite | wgpu.WGPUBufferUsage_CopySrc,
+    output = wgpu.WGPUBufferUsage_MapRead | wgpu.WGPUBufferUsage_CopyDst
 };
 
 pub const Inner = struct {
     buffer: util.Known(wgpu.WGPUBuffer),
+    dir: Direction,
     mapping: ?[]u8,
-    wants_mapping: bool,
-    copy_queued: bool,
-    dir: MapDir,
-    byte_size: u32,
+    dest: wgpu.WGPUBuffer,
+    byte_len: u32,
 
-    pub fn map(self: *Inner) void {
-        if (self.mapping != null) { log.err("Attempt to map buffer that is already mapped.", .{}); unreachable; }
-        self.wants_mapping = true;
-        const dir = switch (self.dir) {
-            .read => wgpu.WGPUMapMode_Read,
-            .write => wgpu.WGPUMapMode_Write
-        };
-        _ = wgpu.wgpuBufferMapAsync(self.buffer, dir, 0, self.byte_size, .{
-            .callback = onMapped,
-            .userdata1 = @ptrCast(self),
-        });
+    pub fn queue(self: *Inner, interface: *Interface, dest: wgpu.WGPUBuffer) void {
+        const queued = self.mapping != null or self.dest != null;
+        if (dest) |d| self.dest = d;
+        if (queued) return;
+        interface.mapped.push(interface.mem, self) catch unreachable;
     }
 
-    fn onMapped(status: wgpu.WGPUMapAsyncStatus, message: wgpu.WGPUStringView, userdata1: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
-        switch (status) {
-            wgpu.WGPUMapAsyncStatus_Success => {
-                const dest: *Inner = @ptrCast(@alignCast(userdata1));
-                if (dest.dir == .write) dest.mapping = getMappedRange(dest.buffer, dest.byte_size)
-                else dest.mapping = getConstMappedRange(dest.buffer, dest.byte_size);
-            },
-            wgpu.WGPUMapAsyncStatus_Aborted => {},
-            else => { log.err("Buffer map failed: {s}", .{ util.fromStringView(message) orelse "No message." }); unreachable; }
-        }
+    pub fn map(self: *Inner, interface: *Interface) []u8 {
+        if (self.mapping) |mapping| return mapping;
+        self.queue(interface, null);
+        const dir = switch (self.dir) {
+            .input => wgpu.WGPUMapMode_Write,
+            .output => wgpu.WGPUMapMode_Read
+        };
+        var success: bool = false;
+        var complete: bool = false;
+        _ = wgpu.wgpuBufferMapAsync(self.buffer, dir, 0, self.byte_len, .{
+            .callback = onMapped,
+            .userdata1 = @ptrCast(&success),
+            .userdata2 = @ptrCast(&complete)
+        });
+        while (!complete) wgpu.wgpuInstanceProcessEvents(interface.instance);
+        if (!success) unreachable;
+
+        self.mapping = if (self.dir == .input) getMappedRange(self.buffer, self.byte_len)
+        else getConstMappedRange(self.buffer, self.byte_len);
+        return self.mapping.?;
+    }
+
+    pub fn unmap(self: *Inner) void {
+        if (self.mapping == null) return;
+        self.mapping = null;
+        wgpu.wgpuBufferUnmap(self.buffer);
+    }
+
+    pub fn onMapped(status: wgpu.WGPUMapAsyncStatus, message: wgpu.WGPUStringView, userdata1: ?*anyopaque, userdata2: ?*anyopaque) callconv(.c) void {
+        const success: *bool = @ptrCast(@alignCast(userdata1));
+        const complete: *bool = @ptrCast(@alignCast(userdata2));
+        complete.* = true;
+        success.* = switch (status) {
+            wgpu.WGPUMapAsyncStatus_Success => true,
+            else => b: {
+                log.err("Buffer map failed: {s}", .{ util.fromStringView(message) orelse "No message." });
+                break :b false;
+            }
+        };
     }
 };
 
@@ -53,219 +76,200 @@ fn getConstMappedRange(buf: util.Known(wgpu.WGPUBuffer), len: u32) []u8 {
     return @constCast(@as([*]const u8, @ptrCast(@alignCast(wgpu.wgpuBufferGetConstMappedRange(buf, 0, len))))[0..len]);
 }
 
-pub fn Mapped(comptime Dir: MapDir, comptime T: type) type { return struct {
-    const Self = @This();
+pub fn _Mapped(comptime Dir: Direction, comptime T: type) type { return struct {
+    const Mapped = @This();
 
     interface: *Interface,
-    inner: *Inner,
+    inner: Inner,
+    capacity: u32,
     len: u32,
 
-    pub fn deinit(self: *Self) void {
-        const index = for (self.interface.buffer_mappings.items, 0..) |buf, i| {
-            if (buf == self.inner) break i;
-        } else unreachable;
-        _ = self.interface.buffer_mappings.swapRemove(index);
-        wgpu.wgpuBufferUnmap(self.inner.buffer);
+    pub fn deinit(self: *Mapped) void {
+        self.inner.unmap();
         wgpu.wgpuBufferRelease(self.inner.buffer);
-        self.interface.mem.destroy(self.inner);
         self.* = undefined;
     }
 
-    pub fn init(interface: *Interface, len: u32) !Self {
-        const byte_size, const overflow = @mulWithOverflow(len, @sizeOf(T));
-        if (overflow != 0) return error.BufferOverflow;
+    pub fn init(interface: *Interface, capacity: u32) OOM!Mapped {
+        const byte_cap, const overflow = @mulWithOverflow(capacity, @sizeOf(T));
+        if (overflow != 0) {
+            log.err("Length exceeds max u32.", .{});
+            return error.OutOfMemory;
+        }
 
         const buffer = wgpu.wgpuDeviceCreateBuffer(interface.device, &.{
             .usage = @intFromEnum(Dir),
-            .size = byte_size,
-            .mappedAtCreation = @intFromBool(true)
-        }) orelse return error.CreateBufferFailed;
+            .size = byte_cap,
+            .mappedAtCreation = @intFromBool(false)
+        }) orelse unreachable;
 
-        const mapping = if (Dir == .write)
-                getMappedRange(buffer, byte_size)
-            else getConstMappedRange(buffer, byte_size);
-
-        const inner = try interface.mem.create(Inner);
-        inner.* = .{
-            .buffer = buffer,
-            .mapping = mapping,
-            .wants_mapping = true,
-            .copy_queued = false,
-            .dir = Dir,
-            .byte_size = byte_size
-        };
-
-        const self: Self = .{
+        return .{
             .interface = interface,
-            .inner = inner,
-            .len = len,
-        };
-
-        try interface.buffer_mappings.append(interface.mem, inner);
-
-        return self;
-    }
-
-    pub fn map(self: *Self) void {
-        self.inner.map();
-    }
-
-    pub fn unmap(self: *Self) void {
-        self.inner.wants_mapping = false;
-        self.inner.mapping = null;
-        wgpu.wgpuBufferUnmap(self.inner.buffer);
-    }
-
-    fn onSwapMapped(status: wgpu.WGPUMapAsyncStatus, message: wgpu.WGPUStringView, userdata1: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
-        switch (status) {
-            wgpu.WGPUMapAsyncStatus_Success => {
-                const done: *bool = @ptrCast(@alignCast(userdata1));
-                done.* = true;
+            .inner = .{
+                .buffer = buffer,
+                .mapping = null,
+                .dest = null,
+                .dir = Dir,
+                .byte_len = byte_cap
             },
-            else => { log.err("Buffer map failed: {s}", .{ util.fromStringView(message) orelse "No message." }); unreachable; }
+            .capacity = capacity,
+            .len = 0
+        };
+    }
+
+    pub fn source(self: *Mapped) util.Known(wgpu.WGPUBuffer) {
+        return self.inner.buffer;
+    }
+
+    pub fn resize(self: *Mapped, cap: u32) OOM!void {
+        if (cap == self.capacity) return;
+        const byte_cap, const overflow = @mulWithOverflow(cap, @sizeOf(T));
+        if (overflow != 0) {
+            log.err("Length exceeds max u32.", .{});
+            return error.OutOfMemory;
         }
-    }
 
-    pub fn resize(self: *Self, new_len: u32) !void {
-        std.debug.panic("no.", .{});
-        const new_byte_size, const overflow = @mulWithOverflow(new_len, @sizeOf(T));
-        if (overflow != 0) return error.BufferOverflow;
+        if (Dir == .input) {
+            const mapped, var src_map = if (self.inner.mapping) |mapping| .{ true, mapping } else .{ false, self.inner.map(self.interface) };
 
-        const encoder = wgpu.wgpuDeviceCreateCommandEncoder(self.interface.device, &.{})
-            orelse return error.CreateEncoderFailed;
-        defer wgpu.wgpuCommandEncoderRelease(encoder);
-
-        if (self.inner.dir == .write) {
-            self.inner.mapping = null;
-            wgpu.wgpuBufferUnmap(self.inner.buffer);
-
-            const read = wgpu.wgpuDeviceCreateBuffer(self.interface.device, &.{
-                .usage = .read,
-                .size = new_byte_size,
-                .mappedAtCreation = @intFromBool(false)
-            }) orelse return error.CreateBufferFailed;
-            defer wgpu.wgpuBufferRelease(read);
-
-            const write = wgpu.wgpuDeviceCreateBuffer(self.interface.device, &.{
-                .usage = .write,
-                .size = new_byte_size,
+            const new = wgpu.wgpuDeviceCreateBuffer(self.interface.device, &.{
+                .usage = @intFromEnum(Dir),
+                .size = byte_cap,
                 .mappedAtCreation = @intFromBool(true)
-            }) orelse return error.CreateBufferFailed;
+            }) orelse unreachable;
+            var dest_map = getMappedRange(new, byte_cap);
+            const copy_len = @min(byte_cap, self.len * @sizeOf(T));
+            @memcpy(dest_map[0..copy_len], src_map[0..copy_len]);
 
-            wgpu.wgpuCommandEncoderCopyBufferToBuffer(encoder, self.inner.buffer, 0, read, 0, @min(new_byte_size, self.byte_capacity));
-            const commands = wgpu.wgpuCommandEncoderFinish(encoder, &.{})
-                orelse return error.CommandEncodingError;
-            defer wgpu.wgpuCommandBufferRelease(commands);
-            wgpu.wgpuQueueSubmit(self.interface.queue, 1, &[1]wgpu.WGPUCommandBuffer{commands});
-
+            self.inner.unmap();
             wgpu.wgpuBufferRelease(self.inner.buffer);
+            self.inner.buffer = new;
+            self.inner.mapping = dest_map;
+            self.inner.byte_len = byte_cap;
 
-            var complete: bool = false;
-            _ = wgpu.wgpuBufferMapAsync(read, wgpu.WGPUMapMode_Read, 0, new_byte_size, .{
-                .callback = onSwapMapped,
-                .userdata1 = &complete
-            });
-            while (!complete) wgpu.wgpuInstanceProcessEvents(self.interface.instance);
-
-            const source = getConstMappedRange(read, new_byte_size);
-            const dest = getMappedRange(write, new_byte_size);
-            @memcpy(dest, source);
-
-            if (!self.inner.wants_mapping) wgpu.wgpuBufferUnmap(write);
-
-            self.inner.buffer = write;
-            self.len = new_len;
-            self.inner.byte_size = new_byte_size;
-        } else {
-            const read = wgpu.wgpuDeviceCreateBuffer(self.interface.device, &.{
-                .usage = .read,
-                .size = new_byte_size,
-                .mappedAtCreation = @intFromBool(false)
-            }) orelse return error.CreateBufferFailed;
-
-            const write = wgpu.wgpuDeviceCreateBuffer(self.interface.device, &.{
-                .usage = .write,
-                .size = new_byte_size,
-                .mappedAtCreation = @intFromBool(true)
-            }) orelse return error.CreateBufferFailed;
-            defer wgpu.wgpuBufferRelease(write);
-
-            if (self.inner.mapping == null) {
-                if (self.inner.wants_mapping == false) {
-                    _ = wgpu.wgpuBufferMapAsync(self.inner.buffer, wgpu.WGPUMapMode_Read, 0, self.inner.byte_size, .{
-                        .callback = self.inner.onMapped,
-                        .userdata1 = self
-                    });
-                }
-                while (self.inner.mapping == null) wgpu.wgpuInstanceProcessEvents(self.interface.instance);
-            }
-
-            const dest = getMappedRange(write, new_byte_size);
-            @memcpy(dest[0..@min(new_byte_size, self.inner.byte_size)], self.inner.mapping.?[0..@min(new_byte_size, self.inner.byte_size)]);
-
-            wgpu.wgpuBufferUnmap(write);
-            self.inner.mapping = null;
-            wgpu.wgpuBufferUnmap(self.inner.buffer);
-            wgpu.wgpuBufferRelease(self.inner.buffer);
-
-            wgpu.wgpuCommandEncoderCopyBufferToBuffer(encoder, read, 0, write, 0, new_byte_size);
-            const commands = wgpu.wgpuCommandEncoderFinish(encoder, &.{})
-                orelse return error.CommandEncodingError;
-            defer wgpu.wgpuCommandBufferRelease(commands);
-            wgpu.wgpuQueueSubmit(self.interface.queue, 1, &[1]wgpu.WGPUCommandBuffer{commands});
-
-            self.inner.buffer = read;
-            self.len = new_len;
-            self.inner.byte_size = new_byte_size;
-
-            if (self.inner.wants_mapping) self.map();
+            if (!mapped) self.inner.unmap();
+        } else { // .output
+            unreachable;
         }
+
+        self.capacity = cap;
     }
 
-    pub fn getRange(self: *Self, offset: u32, len: u32) T {
-        if (offset + len > self.len) { log.err("Attempt to access out of bounds range ({}, {}) of length {}.", .{ offset, offset + len, self.len }); unreachable; }
-        if (self.inner.dir == .write) { log.err("Attempt to read from write-mapped buffer.", .{}); unreachable; }
-        if (!self.inner.wants_mapping) { log.err("Attempt to read from unmapped buffer.", .{}); unreachable; }
-        while (self.inner.mapping == null) wgpu.wgpuInstanceProcessEvents(self.interface.instance);
-        const byte_offset = offset * @sizeOf(T);
-        const byte_len = len * @sizeOf(T);
-        return std.mem.bytesToValue(T, self.inner.mapping.?[byte_offset..(byte_offset + byte_len)]);
+    pub fn ensureTotalCapacityPrecise(self: *Mapped, cap: u32) OOM!void {
+        if (cap <= self.capacity) return;
+        try self.resize(cap);
     }
 
-    pub fn get(self: *Self, index: u32) T {
-        return self.getRange(index, 1);
+    pub fn ensureTotalCapacity(self: *Mapped, cap: u32) OOM!void {
+        var exp = self.capacity;
+        while (exp < cap) exp +|= exp / 2;
+        try self.ensureTotalCapacityPrecise(exp);
     }
 
-    pub fn setRange(self: *Self, offset: u32, vals: []T) void {
-        if (offset + vals.len > self.len) { log.err("Attempt to access out of bounds range ({}, {}) of length {}.", .{ offset, offset + vals.len, self.len }); unreachable; }
-        if (self.inner.dir == .read) { log.err("Attempt to write to read-mapped buffer.", .{}); unreachable; }
-        if (!self.inner.wants_mapping) { log.err("Attempt to write to unmapped buffer.", .{}); unreachable; }
-        while (self.inner.mapping == null) wgpu.wgpuInstanceProcessEvents(self.interface.instance);
-        const byte_offset = offset * @sizeOf(T);
-        const bytes = std.mem.sliceAsBytes(vals);
-        @memcpy(self.inner.mapping.?[byte_offset..(byte_offset + bytes.len)], bytes);
+    pub fn items(self: *Mapped) (if (Dir == .input) []T else []const T) {
+        return @alignCast(std.mem.bytesAsSlice(T, self.inner.map(self.interface)[0..(self.len * @sizeOf(T))]));
     }
 
-    pub fn set(self: *Self, index: u32, val: T) void {
-        self.setRange(index, @constCast(&[1]T{val}));
+    pub fn addOneAssumeCapacity(self: *Mapped) *T {
+        if (Dir == .output) @compileError("Output buffers are read only.");
+        std.debug.assert(self.len < self.capacity);
+        self.len += 1;
+        return &(self.items()[self.len - 1]);
     }
 
-    pub fn slice(self: *Self, start: u32, len: u32) Slice {
-        if (start + len > self.len) { log.err("Attempt to create slice ({}, {}) out of bounds of length {}.", .{ start, len, self.len }); unreachable; }
+    pub fn addOne(self: *Mapped) OOM!*T {
+        try self.ensureTotalCapacity(self.len + 1);
+        return self.addOneAssumeCapacity();
+    }
+
+    pub fn addManyAssumeCapacity(self: *Mapped, num: u32) []T {
+        if (Dir == .output) @compileError("Output buffers are read only.");
+        std.debug.assert(self.len + num <= self.capacity);
+        const offset = self.len;
+        self.len += num;
+        return self.items()[offset..][0..num];
+    }
+
+    pub fn addMany(self: *Mapped, num: u32) []T {
+        try self.ensureTotalCapacity(self.len + num);
+        return self.addManyAssumeCapacity(num);
+    }
+
+    pub fn appendAssumeCapacity(self: *Mapped, val: T) void {
+        self.addOneAssumeCapacity().* = val;
+    }
+
+    pub fn append(self: *Mapped, val: T) OOM!void {
+        (try self.addOne()).* = val;
+    }
+
+    pub fn appendSliceAssumeCapacity(self: *Mapped, vals: []const T) void {
+        @memcpy(self.addManyAssumeCapacity(vals.len), vals);
+    }
+
+    pub fn appendSlice(self: *Mapped, vals: []const T) OOM!void {
+        @memcpy(try self.addMany(vals.len), vals);
+    }
+
+    pub fn clearAndFree(self: *Mapped) void {
+        self.resize(0) catch unreachable;
+        self.len = 0;
+    }
+
+    pub fn clearRetainingCapacity(self: *Mapped) void {
+        self.len = 0;
+    }
+
+    pub fn pop(self: *Mapped) ?T {
+        if (Dir == .output) @compileError("Output buffers are read only.");
+        if (self.len == 0) return null;
+        const popped = self.items()[self.len - 1];
+        self.len -= 1;
+        return popped;
+    }
+
+    pub fn shrinkAndFree(self: *Mapped, len: u32) void {
+        std.debug.assert(len <= self.len);
+        self.resize(len) catch unreachable;
+    }
+
+    pub fn shrinkRetainingCapacity(self: *Mapped, len: u32) void {
+        std.debug.assert(len <= self.len);
+        self.len = len;
+    }
+
+    pub fn swapRemove(self: *Mapped, index: u32) T {
+        if (Dir == .output) @compileError("Output buffers are read only.");
+        if (index == (self.len - 1)) return self.pop().?;
+        var itms = self.items();
+        const prev = itms[index];
+        itms[index] = self.pop().?;
+        return prev;
+    }
+
+
+
+
+
+    pub fn gpuSlice(self: *Mapped, offset: u32, len: u32) GPUSlice {
+        if (offset + len > self.len) {
+            log.err("Attempt to create slice ({}, {}) out of bounds of length {}.", .{ offset, len, self.len });
+            unreachable;
+        }
         return .{
             .source = self.inner.buffer,
-            .start = start,
+            .offset = offset,
             .len = len,
-            .byte_start = start * @sizeOf(T),
+            .byte_offset = offset * @sizeOf(T),
             .byte_len = len * @sizeOf(T)
         };
     }
 
-    pub fn from(self: *Self, start: u32) Slice {
-        return self.slice(start, self.len);
+    pub fn gpuSliceFrom(self: *Mapped, offset: u32) GPUSlice {
+        return self.gpuSlice(offset, self.len);
     }
 
-    pub fn all(self: *Self) Slice {
-        return self.slice(0, self.len);
+    pub fn gpuSliceAll(self: *Mapped) GPUSlice {
+        return self.gpuSlice(0, self.len);
     }
 };}

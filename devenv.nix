@@ -2,8 +2,11 @@
   pkgs-unstable = import inputs.unstable { system = pkgs.stdenv.system; };
 in {
   languages.zig.enable = true;
+  languages.zig.package = pkgs-unstable.zigPackages."0.14";
+  languages.zig.zls.package = pkgs-unstable.zls_0_14;
 
   packages = with pkgs; [
+
     xorg.libX11
     libxkbcommon
     vulkan-headers

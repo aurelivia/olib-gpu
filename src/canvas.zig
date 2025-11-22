@@ -128,21 +128,21 @@ pub fn bind(self: *Self, num: u32, binding: BindGroup) void {
     wgpu.wgpuRenderPassEncoderSetBindGroup(pass, num, binding.inner, 0, null);
 }
 
-pub fn drawGenerated(self: *Self, start: u32, len: u32) void {
+pub fn drawGenerated(self: *Self, offset: u32, len: u32) void {
     const pass = self.assertCanDraw();
-    wgpu.wgpuRenderPassEncoderDraw(pass, len, 1, start, 0);
+    wgpu.wgpuRenderPassEncoderDraw(pass, len, 1, offset, 0);
 }
 
-pub fn draw(self: *Self, vertices: BufferSlice, indexes: ?BufferSlice, instances: ?BufferSlice) void {
+pub fn draw(self: *Self, vertices: GPUSlice, indexes: ?GPUSlice, instances: ?GPUSlice) void {
     const pass = self.assertCanDraw();
-    wgpu.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, vertices.source, vertices.byte_start, vertices.byte_len);
-    const instance_start: u32 = if (instances) |i| i.start else 0;
+    wgpu.wgpuRenderPassEncoderSetVertexBuffer(pass, 0, vertices.source, vertices.byte_offset, vertices.byte_len);
+    const instance_offset: u32 = if (instances) |i| i.offset else 0;
     const instance_len: u32 = if (instances) |i| i.len else 1;
-    if (instances) |i| wgpu.wgpuRenderPassEncoderSetVertexBuffer(pass, 1, i.source, i.byte_start, i.byte_len);
+    if (instances) |i| wgpu.wgpuRenderPassEncoderSetVertexBuffer(pass, 1, i.source, i.byte_offset, i.byte_len);
     if (indexes) |i| {
-        wgpu.wgpuRenderPassEncoderSetIndexBuffer(pass, i.source, wgpu.WGPUIndexFormat_Uint32, i.byte_start, i.byte_len);
-        wgpu.wgpuRenderPassEncoderDrawIndexed(pass, i.len, instance_len, i.start, 0, instance_start);
-    } else wgpu.wgpuRenderPassEncoderDraw(pass, vertices.len, instance_len, vertices.start, instance_start);
+        wgpu.wgpuRenderPassEncoderSetIndexBuffer(pass, i.source, wgpu.WGPUIndexFormat_Uint32, i.byte_offset, i.byte_len);
+        wgpu.wgpuRenderPassEncoderDrawIndexed(pass, i.len, instance_len, i.offset, 0, instance_offset);
+    } else wgpu.wgpuRenderPassEncoderDraw(pass, vertices.len, instance_len, vertices.offset, instance_offset);
 }
 
 pub fn finish(self: *Self) void {

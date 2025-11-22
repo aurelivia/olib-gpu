@@ -7,7 +7,6 @@ const util = @import("./util.zig");
 const enums = @import("./enums.zig");
 const log = std.log.scoped(.@"olib-gpu");
 const Interface = @import("./interface.zig");
-const Slice = @import("./buffer/slice.zig");
 const Texture = @import("./texture.zig");
 
 pub const Stage = enum (wgpu.WGPUShaderStage) {
@@ -108,7 +107,7 @@ pub fn Layout(comptime layout: anytype) type { return struct {
         var fields: [meta.fields.len]std.builtin.Type.StructField = undefined;
         for (0..meta.fields.len) |i| {
             const T = switch (layout[i]) {
-                .uniform, .storage => Slice,
+                .uniform, .storage => util.Known(wgpu.WGPUBuffer),
                 .texture, .sampler => Texture
             };
 
@@ -137,7 +136,7 @@ pub fn Layout(comptime layout: anytype) type { return struct {
                 .offset = 0,
                 .size = wgpu.WGPU_WHOLE_SIZE,
                 .buffer = switch (layout[i]) {
-                    .uniform, .storage => values[i].source,
+                    .uniform, .storage => values[i],
                     else => null
                 },
                 .sampler = switch (layout[i]) {

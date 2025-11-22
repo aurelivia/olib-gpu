@@ -70,7 +70,8 @@ pub fn init(interface: *Interface, source: Source, width: u32, height: u32, useD
     var capabilities: wgpu.WGPUSurfaceCapabilities = undefined;
     switch (wgpu.wgpuSurfaceGetCapabilities(inner, interface.adapter, &capabilities)) {
         wgpu.WGPUStatus_Success => {},
-        else => return error.SurfaceCapabilitiesFailed
+        // else => return error.SurfaceCapabilitiesFailed
+        else => unreachable
     }
     defer wgpu.wgpuSurfaceCapabilitiesFreeMembers(capabilities);
 
